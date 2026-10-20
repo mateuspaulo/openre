@@ -300,13 +300,33 @@ fn handle_ipc_message(
             let offset = msg.payload.get("source_offset").and_then(|v| v.as_u64()).unwrap_or(0);
             let size = msg.payload.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
             let ext = msg.payload.get("extension").and_then(|v| v.as_str()).unwrap_or_default();
+            let orig_path = msg.payload.get("original_path").and_then(|v| v.as_str()).unwrap_or_default();
 
-            emit_log("info", &format!("Generating pre-recovery preview (ext: {}, offset: 0x{:X}, size: {} bytes)...", ext, offset, size), proxy);
+            emit_log("info", &format!("Generating pre-recovery preview for '{}' (ext: {}, offset: 0x{:X}, size: {} bytes)...", if orig_path.is_empty() { source_id } else { orig_path }, ext, offset, size), proxy);
 
-            let preview = if let Ok(mut reader) = open_block_reader(source_id) {
-                let read_limit = (size as usize).min(12 * 1024 * 1024).max(512);
+            let effective_size = if size > 0 { size as usize } else { 4 * 1024 * 1024 };
+            let read_limit = effective_size.min(12 * 1024 * 1024).max(64 * 1024);
+
+            let preview = if !orig_path.is_empty() && Path::new(orig_path).is_file() {
+                // If original file exists on filesystem (e.g. from Quick Scan), read it directly!
+                if let Ok(mut f) = std::fs::File::open(orig_path) {
+                    use std::io::Read;
+                    let mut buf = vec![0u8; read_limit];
+                    let n = f.read(&mut buf).unwrap_or(0);
+                    buf.truncate(n);
+                    generate_preview(&buf, ext)
+                } else if let Ok(mut reader) = open_block_reader(source_id) {
+                    let mut buf = vec![0u8; read_limit];
+                    let n = reader.read_at(offset, &mut buf).unwrap_or(0);
+                    buf.truncate(n);
+                    generate_preview(&buf, ext)
+                } else {
+                    generate_preview(&[], ext)
+                }
+            } else if let Ok(mut reader) = open_block_reader(source_id) {
                 let mut buf = vec![0u8; read_limit];
-                let _ = reader.read_at(offset, &mut buf);
+                let n = reader.read_at(offset, &mut buf).unwrap_or(0);
+                buf.truncate(n);
                 generate_preview(&buf, ext)
             } else {
                 generate_preview(&[], ext)
@@ -320,6 +340,7 @@ fn handle_ipc_message(
             let offset = msg.payload.get("source_offset").and_then(|v| v.as_u64()).unwrap_or(0);
             let size = msg.payload.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
             let fname = msg.payload.get("filename").and_then(|v| v.as_str()).unwrap_or_default();
+            let orig_path = msg.payload.get("original_path").and_then(|v| v.as_str()).unwrap_or_default();
 
             emit_log("info", &format!("Running non-destructive image validation & repair on '{}'...", fname), proxy);
 
@@ -327,14 +348,33 @@ fn handle_ipc_message(
             let mut fixes = Vec::new();
             let mut issues = Vec::new();
 
-            if let Ok(mut reader) = open_block_reader(source_id) {
-                let mut buf = vec![0u8; size.min(10 * 1024 * 1024) as usize];
-                if reader.read_at(offset, &mut buf).is_ok() {
-                    if let Ok(report) = repair_image(&buf, fname) {
-                        success = report.success;
-                        fixes = report.fixes_applied;
-                        issues = report.issues_found;
-                    }
+            let effective_size = if size > 0 { size as usize } else { 4 * 1024 * 1024 };
+            let read_limit = effective_size.min(10 * 1024 * 1024);
+
+            let buf_opt = if !orig_path.is_empty() && Path::new(orig_path).is_file() {
+                if let Ok(mut f) = std::fs::File::open(orig_path) {
+                    use std::io::Read;
+                    let mut b = vec![0u8; read_limit];
+                    let n = f.read(&mut b).unwrap_or(0);
+                    b.truncate(n);
+                    Some(b)
+                } else {
+                    None
+                }
+            } else if let Ok(mut reader) = open_block_reader(source_id) {
+                let mut b = vec![0u8; read_limit];
+                let n = reader.read_at(offset, &mut b).unwrap_or(0);
+                b.truncate(n);
+                Some(b)
+            } else {
+                None
+            };
+
+            if let Some(buf) = buf_opt {
+                if let Ok(report) = repair_image(&buf, fname) {
+                    success = report.success;
+                    fixes = report.fixes_applied;
+                    issues = report.issues_found;
                 }
             }
 

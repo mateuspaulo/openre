@@ -351,12 +351,14 @@ export default function App() {
   const openPreview = async (file: RecoveredFile) => {
     setPreviewFile(file);
     setRepairReport(null);
+    setPreviewData(null);
     setPreviewTab('media');
     const data = await sendIpc('get_file_preview', {
       source_id: selectedSource?.id,
       source_offset: file.source_offset,
       size_bytes: file.size_bytes,
       extension: file.extension,
+      original_path: file.original_path,
     });
     setPreviewData(data);
   };
@@ -368,6 +370,7 @@ export default function App() {
       source_offset: previewFile.source_offset,
       size_bytes: previewFile.size_bytes,
       filename: previewFile.filename,
+      original_path: previewFile.original_path,
     });
     setRepairReport(report);
   };
@@ -1491,7 +1494,14 @@ export default function App() {
                 {(previewFile.category === 'Image' ||
                   ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(previewFile.extension.toLowerCase())) && (
                   <div className="border border-slate-800 rounded-xl p-3 bg-slate-950 flex flex-col items-center">
-                    {previewData?.media_data_url || previewData?.thumbnail_base64 ? (
+                    {!previewData ? (
+                      <div className="py-12 text-center text-slate-400 flex flex-col items-center">
+                        <RotateCcw className="w-8 h-8 animate-spin text-sky-400 mb-2" />
+                        <p className="text-xs font-medium">
+                          {language === 'en' ? 'Loading image stream...' : 'Carregando imagem...'}
+                        </p>
+                      </div>
+                    ) : (previewData.media_data_url || previewData.thumbnail_base64) ? (
                       <div className="w-full flex flex-col items-center">
                         <img
                           src={previewData.media_data_url || previewData.thumbnail_base64}
@@ -1530,7 +1540,12 @@ export default function App() {
                     <div className="text-[11px] text-slate-400 mb-3 font-mono">
                       {previewFile.extension.toUpperCase()} Audio • {(previewFile.size_bytes / (1024 * 1024)).toFixed(2)} MB
                     </div>
-                    {previewData?.media_data_url ? (
+                    {!previewData ? (
+                      <div className="py-4 text-center text-slate-400 flex flex-col items-center">
+                        <RotateCcw className="w-6 h-6 animate-spin text-amber-400 mb-2" />
+                        <p className="text-xs">{language === 'en' ? 'Loading audio buffer...' : 'Carregando áudio...'}</p>
+                      </div>
+                    ) : previewData.media_data_url ? (
                       <div className="w-full">
                         <audio controls className="w-full rounded-lg" src={previewData.media_data_url} preload="auto" />
                         <p className="text-[10px] text-slate-500 text-center mt-2">
@@ -1551,7 +1566,14 @@ export default function App() {
                 {(previewFile.category === 'Video' ||
                   ['mp4', 'webm', 'mkv', 'avi', 'mov'].includes(previewFile.extension.toLowerCase())) && (
                   <div className="border border-slate-800 rounded-xl p-3 bg-slate-950 flex flex-col items-center">
-                    {previewData?.media_data_url ? (
+                    {!previewData ? (
+                      <div className="py-12 text-center text-slate-400 flex flex-col items-center">
+                        <RotateCcw className="w-8 h-8 animate-spin text-purple-400 mb-2" />
+                        <p className="text-xs font-medium">
+                          {language === 'en' ? 'Buffering video stream...' : 'Carregando vídeo...'}
+                        </p>
+                      </div>
+                    ) : previewData.media_data_url ? (
                       <div className="w-full flex flex-col items-center">
                         <video
                           controls

@@ -393,25 +393,52 @@ impl Scanner {
 
             let mut hasher = Sha256::new();
             let mut bytes_written = 0u64;
-            let mut current_offset = file.source_offset;
             let total_to_recover = file.size_bytes;
 
-            while bytes_written < total_to_recover {
-                let to_read = (read_buf.len() as u64).min(total_to_recover - bytes_written) as usize;
-                match reader.read_at(current_offset, &mut read_buf[..to_read]) {
-                    Ok(n) if n > 0 => {
-                        let chunk = &read_buf[..n];
-                        if let Err(e) = out_file.write_all(chunk) {
-                            errors.push(format!("Write error on {:?}: {}", target_path, e));
+            // If file has an existing original path on disk, copy from it directly
+            if let Some(ref orig) = file.original_path {
+                if Path::new(orig).is_file() {
+                    if let Ok(mut src_f) = File::open(orig) {
+                        use std::io::Read;
+                        while bytes_written < total_to_recover {
+                            let to_read = (read_buf.len() as u64).min(total_to_recover - bytes_written) as usize;
+                            match src_f.read(&mut read_buf[..to_read]) {
+                                Ok(n) if n > 0 => {
+                                    let chunk = &read_buf[..n];
+                                    if let Err(e) = out_file.write_all(chunk) {
+                                        errors.push(format!("Write error on {:?}: {}", target_path, e));
+                                        break;
+                                    }
+                                    hasher.update(chunk);
+                                    bytes_written += n as u64;
+                                }
+                                _ => break,
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback to reading from block reader if not recovered via original_path
+            if bytes_written == 0 && total_to_recover > 0 {
+                let mut current_offset = file.source_offset;
+                while bytes_written < total_to_recover {
+                    let to_read = (read_buf.len() as u64).min(total_to_recover - bytes_written) as usize;
+                    match reader.read_at(current_offset, &mut read_buf[..to_read]) {
+                        Ok(n) if n > 0 => {
+                            let chunk = &read_buf[..n];
+                            if let Err(e) = out_file.write_all(chunk) {
+                                errors.push(format!("Write error on {:?}: {}", target_path, e));
+                                break;
+                            }
+                            hasher.update(chunk);
+                            bytes_written += n as u64;
+                            current_offset += n as u64;
+                        }
+                        _ => {
+                            errors.push(format!("Premature EOF reading {:?} at offset {}", file.filename, current_offset));
                             break;
                         }
-                        hasher.update(chunk);
-                        bytes_written += n as u64;
-                        current_offset += n as u64;
-                    }
-                    _ => {
-                        errors.push(format!("Premature EOF reading {:?} at offset {}", file.filename, current_offset));
-                        break;
                     }
                 }
             }

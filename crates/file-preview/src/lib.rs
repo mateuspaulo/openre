@@ -41,7 +41,11 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
             };
 
             let preview_slice = &data[..data.len().min(12 * 1024 * 1024)];
-            let media_url = Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)));
+            let media_url = if !preview_slice.is_empty() {
+                Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)))
+            } else {
+                None
+            };
 
             if let Some(mut img_prev) = generate_image_preview(data) {
                 img_prev.media_data_url = media_url;
@@ -73,7 +77,11 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
             };
 
             let preview_slice = &data[..data.len().min(12 * 1024 * 1024)];
-            let media_url = Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)));
+            let media_url = if !preview_slice.is_empty() {
+                Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)))
+            } else {
+                None
+            };
 
             return PreviewData {
                 preview_type: "audio".to_string(),
@@ -101,7 +109,11 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
             };
 
             let preview_slice = &data[..data.len().min(16 * 1024 * 1024)];
-            let media_url = Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)));
+            let media_url = if !preview_slice.is_empty() {
+                Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)))
+            } else {
+                None
+            };
 
             return PreviewData {
                 preview_type: "video".to_string(),
