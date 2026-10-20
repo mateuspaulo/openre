@@ -1,3 +1,3 @@
 2cfe96c6e057c895894898c21442286699108e768e21b4dae13b6e421ac0db5a  OpenRe-Linux-x64.tar.gz
-dd4c555960b10d9d72a60fec3ed8541ee01e47caf4ba0b8e5b43f69dc0c3907d  OpenRe-Windows-x64-Portable.zip
+1663bae7c6fc681bf031725fcf40a5474fb731c74b96b4c40ca07fd9847c9f0b  OpenRe-Windows-x64-Portable.zip
 69ca435b9ef35dadb8896c6184271d357034164484c724ebaf89e8955c3230bf  openre_amd64.deb
