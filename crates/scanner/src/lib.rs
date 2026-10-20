@@ -232,7 +232,12 @@ impl Scanner {
             match reader.read_at(offset, &mut window[..to_read]) {
                 Ok(bytes_read) => {
                     if bytes_read < 16 {
-                        break;
+                        if offset + window_size as u64 >= total {
+                            break;
+                        } else {
+                            offset += to_read.max(stride) as u64;
+                            continue;
+                        }
                     }
 
                     let slice = &window[..bytes_read];

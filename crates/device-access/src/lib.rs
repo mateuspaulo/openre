@@ -112,7 +112,13 @@ impl FolderBlockReader {
         let mut spans = Vec::new();
         let mut current_offset = 0u64;
 
-        for entry in walkdir::WalkDir::new(dir_path).into_iter().flatten() {
+        let canonical_dir = if dir_path.to_string_lossy().len() == 2 && dir_path.to_string_lossy().ends_with(':') {
+            PathBuf::from(format!("{}\\", dir_path.to_string_lossy()))
+        } else {
+            dir_path.to_path_buf()
+        };
+
+        for entry in walkdir::WalkDir::new(&canonical_dir).into_iter().flatten() {
             if entry.file_type().is_file() {
                 if let Ok(meta) = entry.metadata() {
                     let sz = meta.len();
@@ -129,7 +135,7 @@ impl FolderBlockReader {
         }
 
         Ok(Self {
-            id: dir_path.to_string_lossy().to_string(),
+            id: canonical_dir.to_string_lossy().to_string(),
             spans,
             total_size: current_offset,
         })
@@ -156,13 +162,22 @@ impl BlockReader for FolderBlockReader {
                 let needed = (buf.len() - total_written) as u64;
                 let to_read = needed.min(available_in_span) as usize;
 
+                let mut read_success = false;
                 if let Ok(mut f) = File::open(&span.path) {
                     if f.seek(SeekFrom::Start(offset_in_file)).is_ok() {
                         if let Ok(n) = f.read(&mut buf[total_written..total_written + to_read]) {
                             total_written += n;
                             cur_offset += n as u64;
+                            read_success = true;
                         }
                     }
+                }
+
+                // If file cannot be opened (e.g. locked by Windows OS), pad with zeros and advance!
+                if !read_success {
+                    buf[total_written..total_written + to_read].fill(0);
+                    total_written += to_read;
+                    cur_offset += to_read as u64;
                 }
             }
         }
@@ -328,23 +343,14 @@ fn query_physical_drive_size(file: &File) -> Option<u64> {
 
 /// Opens any storage source (file, directory, raw Windows volume, physical drive)
 /// returning a unified Box<dyn BlockReader>.
+/// Opens any storage source (raw Windows volume, physical drive, directory, file, or raw disk image)
+/// returning a unified Box<dyn BlockReader>.
 pub fn open_block_reader(source_id: &str) -> Result<Box<dyn BlockReader>, RecoveryError> {
-    let path = Path::new(source_id);
+    let trimmed = source_id.trim();
 
-    // 1. If it's a directory on disk, open as FolderBlockReader
-    if path.is_dir() {
-        return Ok(Box::new(FolderBlockReader::open(path)?));
-    }
-
-    // 2. If it's a regular file or raw disk image (.img, .dd, etc.)
-    if path.is_file() {
-        return Ok(Box::new(FileBlockReader::open(path)?));
-    }
-
-    // 3. Windows logical drive letters (e.g. "C:", "C:\", "D:", "d:")
+    // 1. Windows logical drive letters FIRST (e.g. "C:", "C:\", "D:", "d:")
     #[cfg(target_os = "windows")]
     {
-        let trimmed = source_id.trim();
         let is_drive_letter = if trimmed.len() == 2 && trimmed.ends_with(':') {
             trimmed.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
         } else if trimmed.len() == 3 && trimmed.ends_with(":\\") {
@@ -354,28 +360,37 @@ pub fn open_block_reader(source_id: &str) -> Result<Box<dyn BlockReader>, Recove
         };
 
         if is_drive_letter {
-            let letter = trimmed.chars().next().unwrap();
+            let letter = trimmed.chars().next().unwrap().to_ascii_uppercase();
+            // Try opening raw volume (succeeds when running as Administrator)
             match VolumeBlockReader::open_volume(letter) {
                 Ok(reader) => return Ok(Box::new(reader)),
-                Err(RecoveryError::PermissionDenied(msg)) => {
-                    return Err(RecoveryError::PermissionDenied(msg));
-                }
-                Err(e) => {
-                    // If opening raw volume failed, check if directory root exists as fallback
+                Err(RecoveryError::PermissionDenied(_)) | Err(_) => {
+                    // Graceful fallback for non-admin execution:
+                    // Read file stream across the drive root (e.g. "D:\")
                     let root_str = format!("{}:\\", letter);
                     let root_path = Path::new(&root_str);
-                    if root_path.is_dir() {
+                    if root_path.exists() {
                         return Ok(Box::new(FolderBlockReader::open(root_path)?));
                     }
-                    return Err(e);
                 }
             }
         }
 
-        // 4. Windows PhysicalDrive handles (e.g. "\\.\PhysicalDrive0")
+        // 2. Windows PhysicalDrive handles (e.g. "\\.\PhysicalDrive0")
         if trimmed.starts_with(r"\\.\") {
             return Ok(Box::new(VolumeBlockReader::open_physical_drive(trimmed)?));
         }
+    }
+
+    // 3. If it's a directory / folder on disk, open as FolderBlockReader
+    let path = Path::new(trimmed);
+    if path.is_dir() {
+        return Ok(Box::new(FolderBlockReader::open(path)?));
+    }
+
+    // 4. If it's a regular file or raw disk image (.img, .dd, etc.)
+    if path.is_file() {
+        return Ok(Box::new(FileBlockReader::open(path)?));
     }
 
     // 5. Fallback: try FileBlockReader
@@ -653,5 +668,16 @@ mod tests {
         assert_eq!(reader.total_bytes(), 7);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_open_block_reader_drive_d() {
+        let mut reader = open_block_reader("D:").expect("open_block_reader on D: must succeed");
+        assert!(reader.total_bytes() > 0);
+        let mut buf = vec![0u8; 1024 * 1024];
+        let n1 = reader.read_at(0, &mut buf).expect("read 0 must succeed");
+        assert!(n1 > 0);
+        let n2 = reader.read_at(129, &mut buf).expect("read 129 must succeed");
+        assert!(n2 > 0);
     }
 }

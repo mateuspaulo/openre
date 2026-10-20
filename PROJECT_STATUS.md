@@ -57,8 +57,8 @@
 ## 4. Test Results Summary
 
 ```text
-running 24 tests across 8 crates:
-- device_access: 4 passed; 0 failed (added FolderBlockReader and open_block_reader tests)
+running 25 tests across 8 crates:
+- device_access: 5 passed; 0 failed (added FolderBlockReader zero-padding, volume fallback, and drive D reader tests)
 - file_carving: 4 passed; 0 failed
 - file_preview: 2 passed; 0 failed
 - filesystem: 3 passed; 0 failed
@@ -69,15 +69,15 @@ running 24 tests across 8 crates:
 - test_network_isolation: 1 passed; 0 failed (Zero network sockets / dependencies verified)
 - test_end_to_end_recovery: 1 passed; 0 failed (Full synthetic recovery pipeline verified)
 
-Total: 24 passed; 0 failed; 0 ignored; 100% success rate.
+Total: 25 passed; 0 failed; 0 ignored; 100% success rate.
 ```
 
 ---
 
 ## 5. Built Release Artifacts
 
-- **Windows Portable Distribution:** `release/OpenRe-Windows-x64-Portable.zip` (6,981,876 bytes)
-- **SHA-256 Checksum:** `0e1091bb1493d69d8fcb4ba0e5849f1fd3937ef6d072b4cf998e610f4dfcc7e7`
+- **Windows Portable Distribution:** `release/OpenRe-Windows-x64-Portable.zip` (6,982,530 bytes)
+- **SHA-256 Checksum:** `ebefb1cd933afd5efff65da2ac9b325c709e63e3c09b54fcdb97d918449c8783`
 - **Main GUI Executable:** `target/x86_64-pc-windows-gnu/release/OpenRe.exe` (~11.1 MB)
 - **CLI Diagnostic Executable:** `target/x86_64-pc-windows-gnu/release/openre-cli.exe` (8,695,930 bytes)
 

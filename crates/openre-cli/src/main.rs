@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use device_access::{create_disk_image, enumerate_devices, FileBlockReader};
+use device_access::{create_disk_image, enumerate_devices, open_block_reader};
 use file_preview::generate_preview;
 use image_repair::repair_image;
 use recovery_core::CancellationToken;
@@ -86,17 +86,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Scan { source, mode, output } => {
             println!("==> OpenRe — Scanning Source: {}", source);
-            let path = PathBuf::from(&source);
-            let mut reader = FileBlockReader::open(&path)?;
+            let mut reader = open_block_reader(&source)?;
             let cancel = CancellationToken::new();
 
             let files = if mode.eq_ignore_ascii_case("quick") {
-                Scanner::quick_scan(&mut reader, &cancel, |p| {
+                Scanner::quick_scan(&mut *reader, &cancel, |p| {
                     print!("\r[Quick Scan] {} ... Found: {}", p.current_label, p.files_found);
                     let _ = std::io::stdout().flush();
                 })?
             } else {
-                Scanner::deep_scan(&mut reader, &cancel, |p| {
+                Scanner::deep_scan(&mut *reader, &cancel, |p| {
                     print!(
                         "\r[Deep Scan] {} | Progress: {} / {} bytes | Files: {}",
                         p.current_label, p.bytes_scanned, p.total_bytes, p.files_found
@@ -122,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(dest_dir) = output {
                 println!("\n==> Recovering files to {:?}", dest_dir);
                 let report = Scanner::recover_files(
-                    &mut reader,
+                    &mut *reader,
                     &files,
                     &dest_dir,
                     &cancel,
@@ -172,11 +171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::ImageDisk { source, output } => {
             println!("==> OpenRe — Creating Raw Disk Image from {}", source);
-            let path = PathBuf::from(&source);
-            let mut reader = FileBlockReader::open(&path)?;
+            let mut reader = open_block_reader(&source)?;
             let cancel = CancellationToken::new();
 
-            let report = create_disk_image(&mut reader, &output, &cancel, |done, total| {
+            let report = create_disk_image(&mut *reader, &output, &cancel, |done, total| {
                 print!("\r[Imaging] Copied: {} / {} bytes", done, total);
                 let _ = std::io::stdout().flush();
             })?;

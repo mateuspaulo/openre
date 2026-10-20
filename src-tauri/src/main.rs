@@ -160,12 +160,21 @@ fn handle_ipc_message(
                 emit_log(
                     "info",
                     &format!(
-                        "Target device opened successfully. Media capacity: {:.2} MB ({} bytes)",
+                        "Target device opened successfully ({}). Media capacity: {:.2} MB ({} bytes)",
+                        reader.device_id(),
                         total_bytes as f64 / (1024.0 * 1024.0),
                         total_bytes
                     ),
                     &proxy_clone,
                 );
+
+                if source_id.len() <= 3 && source_id.contains(':') && !reader.device_id().starts_with(r"\\.\") {
+                    emit_log(
+                        "info",
+                        "Notice: Raw sector carving requires Administrator elevation. Deep scan running in file-stream mode. (To scan raw unallocated sectors, run OpenRe as Administrator).",
+                        &proxy_clone,
+                    );
+                }
 
                 let proxy_progress = proxy_clone.clone();
                 let proxy_log = proxy_clone.clone();
