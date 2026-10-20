@@ -81,7 +81,7 @@ impl Scanner {
                             let mut offset = start_off;
                             while offset + 1024 <= limit_off {
                                 if cancel.is_cancelled() {
-                                    return Err(RecoveryError::Cancelled);
+                                    break;
                                 }
 
                                 if reader.read_at(offset, &mut mft_buf).is_ok() {
@@ -98,7 +98,7 @@ impl Scanner {
                                     on_progress(progress.clone());
                                 }
                             }
-                            if !results.is_empty() {
+                            if !results.is_empty() || cancel.is_cancelled() {
                                 break;
                             }
                         }
@@ -110,7 +110,7 @@ impl Scanner {
 
                         while offset + 4096 <= scan_limit {
                             if cancel.is_cancelled() {
-                                return Err(RecoveryError::Cancelled);
+                                break;
                             }
 
                             if reader.read_at(offset, &mut dir_buf).is_ok() {
@@ -136,7 +136,7 @@ impl Scanner {
 
                         while offset + 4096 <= scan_limit {
                             if cancel.is_cancelled() {
-                                return Err(RecoveryError::Cancelled);
+                                break;
                             }
 
                             if reader.read_at(offset, &mut dir_buf).is_ok() {
@@ -177,7 +177,7 @@ impl Scanner {
 
             for entry in WalkDir::new(active_dir).into_iter().flatten() {
                 if cancel.is_cancelled() {
-                    return Err(RecoveryError::Cancelled);
+                    break;
                 }
 
                 if entry.file_type().is_file() {
@@ -224,7 +224,11 @@ impl Scanner {
         }
 
         progress.is_complete = true;
-        progress.current_label = format!("Quick scan complete. Found {} files.", results.len());
+        if cancel.is_cancelled() {
+            progress.current_label = format!("Quick scan stopped. Preserved {} files found so far.", results.len());
+        } else {
+            progress.current_label = format!("Quick scan complete. Found {} files.", results.len());
+        }
         on_progress(progress);
 
         Ok(results)
@@ -262,7 +266,7 @@ impl Scanner {
 
         while offset < total {
             if cancel.is_cancelled() {
-                return Err(RecoveryError::Cancelled);
+                break;
             }
 
             let to_read = (window_size as u64).min(total - offset) as usize;
@@ -282,7 +286,7 @@ impl Scanner {
 
                     while local_pos + 16 <= slice.len() {
                         if cancel.is_cancelled() {
-                            return Err(RecoveryError::Cancelled);
+                            break;
                         }
 
                         if let Some(carve) = carve_at_offset(&slice[local_pos..]) {
@@ -335,7 +339,11 @@ impl Scanner {
         }
 
         progress.is_complete = true;
-        progress.current_label = format!("Deep scan finished. Salvaged {} files.", results.len());
+        if cancel.is_cancelled() {
+            progress.current_label = format!("Deep scan stopped by user. Preserved {} files found so far.", results.len());
+        } else {
+            progress.current_label = format!("Deep scan finished. Salvaged {} files.", results.len());
+        }
         on_progress(progress);
 
         Ok(results)

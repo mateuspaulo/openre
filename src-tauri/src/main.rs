@@ -260,7 +260,7 @@ fn handle_ipc_message(
                         }
                         emit_log(
                             "success",
-                            &format!("Scan completed successfully! {} recoverable files identified.", count),
+                            &format!("Scan completed! {} recoverable files identified.", count),
                             &proxy_clone,
                         );
                         emit_event(
@@ -270,10 +270,15 @@ fn handle_ipc_message(
                         );
                     }
                     Err(RecoveryError::Cancelled) => {
-                        emit_log("warn", "Scan operation cancelled by user.", &proxy_clone);
+                        let preserved_files = state_clone
+                            .lock()
+                            .map(|st| st.last_discovered.clone())
+                            .unwrap_or_default();
+                        let count = preserved_files.len();
+                        emit_log("info", &format!("Scan stopped by user. Preserved {} files discovered so far.", count), &proxy_clone);
                         emit_event(
-                            "scan_error",
-                            &serde_json::json!({ "error": "Scan operation cancelled by user." }).to_string(),
+                            "scan_completed",
+                            &serde_json::json!({ "files": preserved_files }).to_string(),
                             &proxy_clone,
                         );
                     }
@@ -290,7 +295,7 @@ fn handle_ipc_message(
             });
         }
         "cancel_scan" => {
-            emit_log("warn", "Cancellation requested by user...", proxy);
+            emit_log("warn", "Scan stop requested by user...", proxy);
             if let Ok(st) = state.lock() {
                 st.cancel_token.cancel();
             }
@@ -347,6 +352,9 @@ fn handle_ipc_message(
             let mut success = false;
             let mut fixes = Vec::new();
             let mut issues = Vec::new();
+            let mut saved = false;
+            let mut saved_path_str: Option<String> = None;
+            let mut user_cancelled = false;
 
             let effective_size = if size > 0 { size as usize } else { 4 * 1024 * 1024 };
             let read_limit = effective_size.min(10 * 1024 * 1024);
@@ -375,17 +383,55 @@ fn handle_ipc_message(
                     success = report.success;
                     fixes = report.fixes_applied;
                     issues = report.issues_found;
+
+                    // If file has valid repaired data, ask the user where to save the copy
+                    if !report.repaired_data.is_empty() {
+                        let clean_name = Path::new(fname).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "image.jpg".to_string());
+                        let default_name = format!("repaired_{}", clean_name);
+                        let is_png = fname.to_lowercase().ends_with(".png");
+
+                        let mut dialog = rfd::FileDialog::new()
+                            .set_title("Save Repaired File Copy As / Salvar Cópia Reparada Como")
+                            .set_file_name(&default_name);
+
+                        if is_png {
+                            dialog = dialog.add_filter("PNG Image", &["png"]);
+                        } else {
+                            dialog = dialog.add_filter("JPEG Image", &["jpg", "jpeg"]);
+                        }
+
+                        if let Some(dest_path) = dialog.save_file() {
+                            if std::fs::write(&dest_path, &report.repaired_data).is_ok() {
+                                saved = true;
+                                let p_str = dest_path.to_string_lossy().to_string();
+                                emit_log("success", &format!("Repaired copy saved successfully to: '{}'", p_str), proxy);
+                                saved_path_str = Some(p_str);
+                            } else {
+                                emit_log("error", &format!("Failed to write repaired file to: '{}'", dest_path.display()), proxy);
+                            }
+                        } else {
+                            user_cancelled = true;
+                            emit_log("info", "Save destination selection cancelled by user.", proxy);
+                        }
+                    }
                 }
             }
 
-            if success {
-                emit_log("success", &format!("Repair analysis completed for '{}': {} fixes applied", fname, fixes.len()), proxy);
+            if saved {
+                emit_log("success", &format!("Non-destructive repair applied for '{}': {} fixes applied and copy saved.", fname, fixes.len()), proxy);
+            } else if user_cancelled {
+                emit_log("info", &format!("Repair copy for '{}' was prepared but saving was cancelled.", fname), proxy);
+            } else if success {
+                emit_log("info", &format!("Repair validation succeeded for '{}': {} fixes identified.", fname, fixes.len()), proxy);
             } else {
-                emit_log("warn", &format!("Repair analysis completed for '{}': {} issues found", fname, issues.len()), proxy);
+                emit_log("warn", &format!("Repair analysis completed for '{}': {} issues found.", fname, issues.len()), proxy);
             }
 
             let json = serde_json::json!({
                 "success": success,
+                "saved": saved,
+                "saved_path": saved_path_str,
+                "user_cancelled": user_cancelled,
                 "fixes_applied": fixes,
                 "issues_found": issues,
             })
@@ -435,7 +481,14 @@ fn handle_ipc_message(
             if let Some(path) = msg.payload.get("path").and_then(|v| v.as_str()) {
                 emit_log("info", &format!("Opening output folder in OS file explorer: {}", path), proxy);
                 #[cfg(target_os = "windows")]
-                let _ = std::process::Command::new("explorer").arg(path).spawn();
+                {
+                    let p = std::path::Path::new(path);
+                    if p.is_file() {
+                        let _ = std::process::Command::new("explorer").arg(format!("/select,{}", path)).spawn();
+                    } else {
+                        let _ = std::process::Command::new("explorer").arg(path).spawn();
+                    }
+                }
                 #[cfg(target_os = "linux")]
                 let _ = std::process::Command::new("xdg-open").arg(path).spawn();
             }

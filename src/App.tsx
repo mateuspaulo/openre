@@ -90,6 +90,9 @@ interface RepairReport {
   issues_found: string[];
   fixes_applied: string[];
   success: boolean;
+  saved?: boolean;
+  saved_path?: string;
+  user_cancelled?: boolean;
 }
 
 interface LogEntry {
@@ -136,6 +139,7 @@ export default function App() {
 
   // Preview Drawer tab ('media' | 'hex')
   const [previewTab, setPreviewTab] = useState<'media' | 'hex'>('media');
+  const [copiedHex, setCopiedHex] = useState<boolean>(false);
 
   // Terminal & Diagnostics state
   const [showTerminal, setShowTerminal] = useState<boolean>(true);
@@ -144,7 +148,7 @@ export default function App() {
       id: 'init-1',
       timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
       level: 'info',
-      message: 'OpenRe v0.1.2 engine initialized in strict offline-first mode. Zero telemetry active.',
+      message: 'OpenRe v0.1.3 engine initialized in strict offline-first mode. Zero telemetry active.',
     },
     {
       id: 'init-2',
@@ -307,9 +311,13 @@ export default function App() {
   };
 
   const handleCancelScan = () => {
-    appendLog('warn', 'Scan cancel requested by user.');
+    appendLog(
+      'warn',
+      language === 'en'
+        ? 'Scan stop requested by user. Finalizing and preserving all discovered files...'
+        : 'Parada solicitada pelo usuário. Finalizando e preservando todos os arquivos localizados...'
+    );
     sendIpc('cancel_scan');
-    setIsScanning(false);
   };
 
 
@@ -373,6 +381,16 @@ export default function App() {
       original_path: previewFile.original_path,
     });
     setRepairReport(report);
+  };
+
+  const handleCopyHexDump = () => {
+    if (!previewData?.hex_dump || previewData.hex_dump.length === 0) return;
+    const text = previewData.hex_dump
+      .map((line) => `${line.offset}  ${line.hex}  |${line.ascii}|`)
+      .join('\n');
+    navigator.clipboard.writeText(text);
+    setCopiedHex(true);
+    setTimeout(() => setCopiedHex(false), 2000);
   };
 
   const filteredFiles = discoveredFiles.filter((f) => {
@@ -452,7 +470,7 @@ export default function App() {
           <div>
             <div className="font-semibold text-base tracking-wide flex items-center gap-2">
               OpenRe
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.2</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.3</span>
             </div>
             <div className="text-[11px] text-slate-400">Professional File Recovery</div>
           </div>
@@ -1614,24 +1632,112 @@ export default function App() {
                 {(previewFile.extension === 'jpg' || previewFile.extension === 'png') && (
                   <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 flex items-center justify-between">
                     <div>
-                      <div className="font-semibold text-xs text-indigo-300">Non-Destructive Image Repair</div>
-                      <div className="text-[11px] text-slate-400">Reconstruct missing markers and recalculate chunk CRCs.</div>
+                      <div className="font-semibold text-xs text-indigo-300">
+                        {language === 'en' ? 'Non-Destructive Image Repair' : 'Reparo Não Destrutivo de Imagem'}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {language === 'en'
+                          ? 'Reconstruct missing markers, recalculate CRCs, and choose destination to save.'
+                          : 'Reconstrói marcadores perdidos, recalcula CRCs e permite escolher onde salvar.'}
+                      </div>
                     </div>
                     <button
                       onClick={handleRepairCopy}
-                      className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1.5 shrink-0"
                     >
-                      <Wrench className="w-3.5 h-3.5" /> Repair Copy
+                      <Wrench className="w-3.5 h-3.5" />
+                      <span>{language === 'en' ? 'Repair Copy' : 'Reparar Cópia'}</span>
                     </button>
                   </div>
                 )}
 
                 {repairReport && (
-                  <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-300">
-                    <div className="font-semibold mb-1">Repair Applied:</div>
-                    {repairReport.fixes_applied.map((f, i) => (
-                      <div key={i}>• {f}</div>
-                    ))}
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs space-y-2.5 ${
+                      repairReport.saved
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                        : repairReport.user_cancelled
+                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                        : repairReport.success
+                        ? 'border-indigo-500/40 bg-indigo-500/10 text-indigo-200'
+                        : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold flex items-center gap-1.5 text-xs">
+                        {repairReport.saved ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                            <span>{language === 'en' ? 'Repaired Copy Saved Successfully!' : 'Cópia Reparada Salva com Sucesso!'}</span>
+                          </>
+                        ) : repairReport.user_cancelled ? (
+                          <>
+                            <AlertTriangle className="w-4 h-4 text-amber-400" />
+                            <span>{language === 'en' ? 'Save Cancelled by User' : 'Salvamento Cancelado pelo Usuário'}</span>
+                          </>
+                        ) : repairReport.success ? (
+                          <>
+                            <CheckCircle2 className="w-4 h-4 text-indigo-400" />
+                            <span>{language === 'en' ? 'Repair Completed' : 'Reparo Concluído'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle className="w-4 h-4 text-rose-400" />
+                            <span>{language === 'en' ? 'Repair Issues Found' : 'Problemas Encontrados'}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {repairReport.saved && repairReport.saved_path && (
+                      <div className="p-2.5 rounded-lg bg-slate-950/80 border border-emerald-500/25 space-y-2">
+                        <div className="text-slate-400 font-semibold text-[11px]">
+                          {language === 'en' ? 'Saved copy destination:' : 'Arquivo salvo em:'}
+                        </div>
+                        <div className="font-mono text-emerald-300 break-all select-text cursor-text bg-black/50 p-2 rounded text-[11px] border border-emerald-500/20">
+                          {repairReport.saved_path}
+                        </div>
+                        <button
+                          onClick={() => sendIpc('open_output_folder', { path: repairReport.saved_path })}
+                          className="px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center gap-1.5 transition shadow-sm"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5" />
+                          <span>{language === 'en' ? 'Open in File Explorer' : 'Abrir Pasta no Explorador'}</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {repairReport.fixes_applied && repairReport.fixes_applied.length > 0 && (
+                      <div>
+                        <div className="font-semibold text-slate-300 mb-1">
+                          {language === 'en' ? 'Fixes applied:' : 'Correções aplicadas:'}
+                        </div>
+                        <div className="space-y-1">
+                          {repairReport.fixes_applied.map((f, i) => (
+                            <div key={i} className="text-slate-300 text-[11px] flex items-center gap-1.5">
+                              <span className="text-emerald-400 font-bold">•</span>
+                              <span>{f}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {repairReport.issues_found && repairReport.issues_found.length > 0 && (
+                      <div>
+                        <div className="font-semibold text-slate-400 mb-1">
+                          {language === 'en' ? 'Issues identified:' : 'Problemas identificados:'}
+                        </div>
+                        <div className="space-y-1">
+                          {repairReport.issues_found.map((iss, i) => (
+                            <div key={i} className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                              <span className="text-amber-400 font-bold">•</span>
+                              <span>{iss}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1667,20 +1773,46 @@ export default function App() {
             ) : (
               /* Hex Dump Inspection Tab */
               <div className="space-y-3">
-                <div className="p-2.5 rounded-lg border border-sky-500/20 bg-sky-500/10 text-[11px] text-sky-300">
-                  {language === 'en'
-                    ? 'Showing raw binary sector bytes (first 512 bytes) read directly from disk offsets.'
-                    : 'Exibindo bytes binários brutos do setor (primeiros 512 bytes) lidos diretamente do disco.'}
+                <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg border border-sky-500/20 bg-sky-500/10 text-[11px] text-sky-300">
+                  <span>
+                    {language === 'en'
+                      ? 'Showing raw binary sector bytes (first 512 bytes) read directly from disk offsets.'
+                      : 'Exibindo bytes binários brutos do setor (primeiros 512 bytes) lidos diretamente do disco.'}
+                  </span>
+                  {previewData?.hex_dump && previewData.hex_dump.length > 0 && (
+                    <button
+                      onClick={handleCopyHexDump}
+                      className="shrink-0 px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition border border-slate-700/50"
+                      title={language === 'en' ? 'Copy hex dump to clipboard' : 'Copiar dump hexadecimal para a área de transferência'}
+                    >
+                      {copiedHex ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span className="text-emerald-400">{language === 'en' ? 'Copied!' : 'Copiado!'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-slate-400" />
+                          <span>{language === 'en' ? 'Copy Hex Dump' : 'Copiar Hex'}</span>
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 {previewData?.hex_dump && previewData.hex_dump.length > 0 ? (
-                  <div className="border border-slate-800 rounded-lg p-3 bg-slate-950 font-mono text-[11px] overflow-x-auto">
-                    <div className="text-slate-400 font-semibold mb-2">Sector Hex Dump:</div>
+                  <div className="border border-slate-800 rounded-lg p-3 bg-slate-950 font-mono text-[11px] overflow-x-auto select-text cursor-text">
+                    <div className="flex items-center justify-between text-slate-400 font-semibold mb-2 select-none">
+                      <span>Sector Hex Dump:</span>
+                      <span className="text-[10px] text-slate-500 font-normal">
+                        {language === 'en' ? '(Selectable text — drag to highlight & copy)' : '(Texto selecionável — arraste para marcar e copiar)'}
+                      </span>
+                    </div>
                     {previewData.hex_dump.map((line, idx) => (
-                      <div key={idx} className="flex gap-2 text-slate-300">
-                        <span className="text-slate-500">{line.offset}</span>
-                        <span className="text-sky-300">{line.hex}</span>
-                        <span className="text-slate-400">|{line.ascii}|</span>
+                      <div key={idx} className="flex gap-2 text-slate-300 hover:bg-slate-900/60 py-0.5 px-1 rounded select-text cursor-text font-mono">
+                        <span className="text-slate-500 select-text cursor-text shrink-0">{line.offset}</span>
+                        <span className="text-sky-300 select-text cursor-text shrink-0">{line.hex}</span>
+                        <span className="text-slate-400 select-text cursor-text">|{line.ascii}|</span>
                       </div>
                     ))}
                   </div>
