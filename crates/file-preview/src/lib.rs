@@ -30,38 +30,21 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
 
     match category {
         FileCategory::Image => {
-            let mime = match extension.to_lowercase().as_str() {
-                "jpg" | "jpeg" => "image/jpeg",
-                "png" => "image/png",
-                "gif" => "image/gif",
-                "webp" => "image/webp",
-                "bmp" => "image/bmp",
-                "svg" => "image/svg+xml",
-                _ => "image/png",
-            };
-
-            let preview_slice = &data[..data.len().min(12 * 1024 * 1024)];
-            let media_url = if !preview_slice.is_empty() {
-                Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)))
-            } else {
-                None
-            };
-
             if let Some(mut img_prev) = generate_image_preview(data, extension) {
-                img_prev.media_data_url = media_url;
                 img_prev.hex_dump = hex_lines;
                 return img_prev;
             }
 
             return PreviewData {
                 preview_type: "image".to_string(),
-                media_data_url: media_url,
+                media_data_url: None,
                 thumbnail_base64: None,
                 dimensions: None,
                 hex_dump: hex_lines,
                 text_snippet: None,
                 metadata_entries: vec![
                     ("Format".to_string(), extension.to_uppercase()),
+                    ("Status".to_string(), "Incomplete or Corrupt Image Stream".to_string()),
                     ("Size".to_string(), format!("{} bytes", data.len())),
                 ],
             };
@@ -76,9 +59,9 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
                 _ => "audio/mpeg",
             };
 
-            let preview_slice = &data[..data.len().min(12 * 1024 * 1024)];
-            let media_url = if !preview_slice.is_empty() {
-                Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)))
+            // Only encode data URL if file is under 3MB to prevent IPC freezing and broken playback
+            let media_url = if !data.is_empty() && data.len() <= 3 * 1024 * 1024 {
+                Some(format!("data:{};base64,{}", mime, BASE64.encode(data)))
             } else {
                 None
             };
@@ -108,9 +91,9 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
                 _ => "video/mp4",
             };
 
-            let preview_slice = &data[..data.len().min(16 * 1024 * 1024)];
-            let media_url = if !preview_slice.is_empty() {
-                Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)))
+            // Only encode data URL if file is under 3MB to prevent IPC freezing and broken playback
+            let media_url = if !data.is_empty() && data.len() <= 3 * 1024 * 1024 {
+                Some(format!("data:{};base64,{}", mime, BASE64.encode(data)))
             } else {
                 None
             };
@@ -182,89 +165,116 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
     }
 }
 
-pub fn generate_image_preview(data: &[u8], extension: &str) -> Option<PreviewData> {
+fn try_decode_image(data: &[u8], extension: &str) -> Option<image::DynamicImage> {
     if data.len() < 16 {
         return None;
     }
 
-    let cursor = Cursor::new(data);
-    let reader = ImageReader::new(cursor);
-    let reader = if let Ok(guessed) = reader.with_guessed_format() {
-        if guessed.format().is_some() {
-            guessed
-        } else if let Some(fmt) = ImageFormat::from_extension(extension) {
-            let mut r = ImageReader::new(Cursor::new(data));
-            r.set_format(fmt);
-            r
-        } else {
-            guessed
+    // Attempt 1: Direct decode with format guessing
+    if let Ok(reader) = ImageReader::new(Cursor::new(data)).with_guessed_format() {
+        if let Ok(img) = reader.decode() {
+            return Some(img);
         }
-    } else if let Some(fmt) = ImageFormat::from_extension(extension) {
+    }
+
+    // Attempt 2: Explicit format from extension
+    if let Some(fmt) = ImageFormat::from_extension(extension) {
         let mut r = ImageReader::new(Cursor::new(data));
         r.set_format(fmt);
-        r
-    } else {
-        return None;
-    };
+        if let Ok(img) = r.decode() {
+            return Some(img);
+        }
+    }
 
-    let format = reader.format()?;
-    let img = reader.decode().ok()?;
+    // Attempt 3: Truncated stream repair
+    // JPEG missing EOI (FF D9)
+    if data.starts_with(&[0xFF, 0xD8]) {
+        let mut patched = data.to_vec();
+        if patched.len() >= 2 && !(patched[patched.len() - 2] == 0xFF && patched[patched.len() - 1] == 0xD9) {
+            patched.push(0xFF);
+            patched.push(0xD9);
+            let mut r = ImageReader::new(Cursor::new(&patched));
+            r.set_format(ImageFormat::Jpeg);
+            if let Ok(img) = r.decode() {
+                return Some(img);
+            }
+        }
+    }
 
+    // PNG missing IEND
+    const PNG_SIG: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if data.len() >= 8 && data.starts_with(&PNG_SIG) {
+        let mut patched = data.to_vec();
+        let iend_chunk = [0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82];
+        patched.extend_from_slice(&iend_chunk);
+        let mut r = ImageReader::new(Cursor::new(&patched));
+        r.set_format(ImageFormat::Png);
+        if let Ok(img) = r.decode() {
+            return Some(img);
+        }
+    }
+
+    None
+}
+
+pub fn generate_image_preview(data: &[u8], extension: &str) -> Option<PreviewData> {
+    let img = try_decode_image(data, extension)?;
     let (w, h) = (img.width(), img.height());
 
-    // Generate in-memory thumbnail (max 128x128)
-    let thumb = img.resize(128, 128, FilterType::Triangle);
+    // Generate 80x80 compact thumbnail (max 1.5 - 2KB)
+    let thumb = img.resize(80, 80, FilterType::Triangle);
     let mut thumb_buf = Vec::new();
-    let mut thumb_cursor = Cursor::new(&mut thumb_buf);
-    thumb.write_to(&mut thumb_cursor, ImageFormat::Png).ok()?;
+    let thumb_b64 = if thumb.write_to(&mut Cursor::new(&mut thumb_buf), ImageFormat::Jpeg).is_ok() {
+        format!("data:image/jpeg;base64,{}", BASE64.encode(&thumb_buf))
+    } else {
+        let mut png_buf = Vec::new();
+        thumb.write_to(&mut Cursor::new(&mut png_buf), ImageFormat::Png).ok()?;
+        format!("data:image/png;base64,{}", BASE64.encode(&png_buf))
+    };
 
-    let b64 = format!("data:image/png;base64,{}", BASE64.encode(&thumb_buf));
+    // Generate max 600x600 preview for the lateral drawer (approx 25KB - 35KB)
+    let preview_img = if w > 600 || h > 600 {
+        img.resize(600, 600, FilterType::Triangle)
+    } else {
+        img
+    };
+    let mut prev_buf = Vec::new();
+    let media_url = if preview_img.write_to(&mut Cursor::new(&mut prev_buf), ImageFormat::Jpeg).is_ok() {
+        Some(format!("data:image/jpeg;base64,{}", BASE64.encode(&prev_buf)))
+    } else {
+        let mut png_buf = Vec::new();
+        if preview_img.write_to(&mut Cursor::new(&mut png_buf), ImageFormat::Png).is_ok() {
+            Some(format!("data:image/png;base64,{}", BASE64.encode(&png_buf)))
+        } else {
+            Some(thumb_b64.clone())
+        }
+    };
 
     Some(PreviewData {
         preview_type: "image".to_string(),
-        media_data_url: None,
-        thumbnail_base64: Some(b64),
+        media_data_url: media_url,
+        thumbnail_base64: Some(thumb_b64),
         dimensions: Some((w, h)),
         hex_dump: Vec::new(),
         text_snippet: None,
         metadata_entries: vec![
-            ("Format".to_string(), format!("{format:?}")),
-            ("Resolution".to_string(), format!("{w} x {h} px")),
+            ("Format".to_string(), extension.to_uppercase()),
+            ("Resolution".to_string(), format!("{w} × {h} px")),
             ("Raw Size".to_string(), format!("{} bytes", data.len())),
         ],
     })
 }
 
 pub fn generate_thumbnail_data_url(data: &[u8], extension: &str) -> Option<String> {
-    if data.len() < 8 {
-        return None;
-    }
-
-    // Try decoding image with image crate to make a clean compact thumbnail
-    if let Some(prev) = generate_image_preview(data, extension) {
-        if let Some(thumb) = prev.thumbnail_base64 {
-            return Some(thumb);
-        }
-    }
-
-    // Fallback: If image crate decode failed (or format is SVG/WebP/ICO/partial data),
-    // encode directly as a data URL up to 2MB so the browser's native renderer can display it!
-    let mime = match extension.to_lowercase().as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        "ico" => "image/x-icon",
-        _ => "image/png",
-    };
-
-    let slice_limit = data.len().min(2 * 1024 * 1024);
-    if slice_limit > 0 {
-        Some(format!("data:{};base64,{}", mime, BASE64.encode(&data[..slice_limit])))
+    let img = try_decode_image(data, extension)?;
+    let thumb = img.resize(80, 80, FilterType::Triangle);
+    let mut thumb_buf = Vec::new();
+    if thumb.write_to(&mut Cursor::new(&mut thumb_buf), ImageFormat::Jpeg).is_ok() {
+        Some(format!("data:image/jpeg;base64,{}", BASE64.encode(&thumb_buf)))
     } else {
-        None
+        let mut png_buf = Vec::new();
+        thumb.write_to(&mut Cursor::new(&mut png_buf), ImageFormat::Png).ok()?;
+        Some(format!("data:image/png;base64,{}", BASE64.encode(&png_buf)))
     }
 }
 
@@ -327,5 +337,33 @@ mod tests {
         let prev = generate_preview(text, "txt");
         assert_eq!(prev.preview_type, "text");
         assert_eq!(prev.text_snippet.unwrap(), "This is a recovery test file.");
+    }
+
+    #[test]
+    fn test_corrupt_data_does_not_produce_broken_thumbnail() {
+        // Raw random bytes should return None and NEVER return a broken base64 string
+        let garbage = vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0];
+        let thumb = generate_thumbnail_data_url(&garbage, "jpg");
+        assert!(thumb.is_none());
+
+        let prev = generate_preview(&garbage, "jpg");
+        assert_eq!(prev.preview_type, "image");
+        assert!(prev.thumbnail_base64.is_none());
+        assert!(prev.media_data_url.is_none());
+    }
+
+    #[test]
+    fn test_valid_image_thumbnail_generation() {
+        // Create a 10x10 test image and encode as PNG
+        let img = image::RgbImage::new(10, 10);
+        let mut buf = Vec::new();
+        img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png).unwrap();
+
+        let thumb = generate_thumbnail_data_url(&buf, "png");
+        assert!(thumb.is_some());
+        let url = thumb.unwrap();
+        assert!(url.starts_with("data:image/"));
+        // Thumbnail should be compact (< 4KB)
+        assert!(url.len() < 4096);
     }
 }

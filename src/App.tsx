@@ -220,6 +220,9 @@ export default function App() {
   const [previewFile, setPreviewFile] = useState<RecoveredFile | null>(null);
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const [repairReport, setRepairReport] = useState<RepairReport | null>(null);
+  const [imageError, setImageError] = useState(false);
+  const [audioError, setAudioError] = useState(false);
+  const [videoError, setVideoError] = useState(false);
 
   // Recovery state
   const [destPath, setDestPath] = useState<string>('');
@@ -453,6 +456,9 @@ export default function App() {
     setPreviewFile(file);
     setRepairReport(null);
     setPreviewTab('media');
+    setImageError(false);
+    setAudioError(false);
+    setVideoError(false);
 
     // If thumbnail already generated for image, pre-seed previewData for instant visual feedback
     if (file.category === 'Image' && file.thumbnail_url) {
@@ -1505,6 +1511,9 @@ export default function App() {
                                 alt={file.filename}
                                 className="w-5 h-5 object-cover rounded border border-slate-700/80 shrink-0 select-none"
                                 loading="lazy"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLElement).style.display = 'none';
+                                }}
                               />
                             ) : (
                               getCategoryIcon(file.category)
@@ -1582,6 +1591,9 @@ export default function App() {
                                 alt={file.filename}
                                 className="max-h-full max-w-full object-contain rounded select-none group-hover:scale-105 transition-transform duration-200"
                                 loading="lazy"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLElement).style.display = 'none';
+                                }}
                               />
                             ) : (
                               <div className="flex flex-col items-center text-slate-400 group-hover:text-sky-300 transition-colors">
@@ -1996,12 +2008,13 @@ export default function App() {
                           {language === 'en' ? 'Loading image stream...' : 'Carregando imagem...'}
                         </p>
                       </div>
-                    ) : (previewData.media_data_url || previewData.thumbnail_base64) ? (
+                    ) : (previewData.media_data_url || previewData.thumbnail_base64) && !imageError ? (
                       <div className="w-full flex flex-col items-center">
                         <img
                           src={previewData.media_data_url || previewData.thumbnail_base64}
                           alt={previewFile.filename}
                           className="max-h-64 max-w-full object-contain rounded-lg shadow-lg border border-slate-850"
+                          onError={() => setImageError(true)}
                         />
                         {previewData.dimensions && (
                           <div className="text-[11px] text-slate-400 mt-2.5 font-mono flex items-center gap-2">
@@ -2017,7 +2030,14 @@ export default function App() {
                       <div className="py-8 text-center text-slate-500">
                         <ImageIcon className="w-10 h-10 mx-auto mb-2 text-slate-600" />
                         <p className="text-xs">
-                          {language === 'en' ? 'No preview image available.' : 'Nenhuma imagem disponível.'}
+                          {language === 'en'
+                            ? 'No preview image available (incomplete stream or corrupted format).'
+                            : 'Nenhuma prévia disponível (fluxo incompleto ou formato danificado).'}
+                        </p>
+                        <p className="text-[11px] text-slate-600 mt-1">
+                          {language === 'en'
+                            ? 'Inspect raw byte signatures in the Hex Dump tab.'
+                            : 'Inspecione as assinaturas de bytes na aba Inspeção Hexadecimal.'}
                         </p>
                       </div>
                     )}
@@ -2040,19 +2060,34 @@ export default function App() {
                         <RotateCcw className="w-6 h-6 animate-spin text-amber-400 mb-2" />
                         <p className="text-xs">{language === 'en' ? 'Loading audio buffer...' : 'Carregando áudio...'}</p>
                       </div>
-                    ) : previewData.media_data_url ? (
+                    ) : previewData.media_data_url && !audioError ? (
                       <div className="w-full">
-                        <audio controls className="w-full rounded-lg" src={previewData.media_data_url} preload="auto" />
+                        <audio
+                          controls
+                          className="w-full rounded-lg"
+                          src={previewData.media_data_url}
+                          preload="auto"
+                          onError={() => setAudioError(true)}
+                        />
                         <p className="text-[10px] text-slate-500 text-center mt-2">
                           {language === 'en'
-                            ? 'Audio stream loaded directly from carved raw sectors.'
-                            : 'Fluxo de áudio carregado diretamente dos setores gravados.'}
+                            ? 'Audio stream loaded successfully.'
+                            : 'Fluxo de áudio carregado com sucesso.'}
                         </p>
                       </div>
                     ) : (
-                      <p className="text-xs text-amber-400/80 italic">
-                        {language === 'en' ? 'Audio stream buffer unavailable.' : 'Buffer de áudio indisponível.'}
-                      </p>
+                      <div className="w-full py-4 text-center">
+                        <p className="text-xs text-amber-400/90 font-medium mb-1">
+                          {language === 'en'
+                            ? 'Inline audio preview unavailable for this container/size.'
+                            : 'Prévia de áudio embutida indisponível para este formato/tamanho.'}
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          {language === 'en'
+                            ? 'Use "Save File Copy" below to extract the complete audio file.'
+                            : 'Use "Salvar Cópia" abaixo para extrair o arquivo completo.'}
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}
@@ -2068,13 +2103,14 @@ export default function App() {
                           {language === 'en' ? 'Buffering video stream...' : 'Carregando vídeo...'}
                         </p>
                       </div>
-                    ) : previewData.media_data_url ? (
+                    ) : previewData.media_data_url && !videoError ? (
                       <div className="w-full flex flex-col items-center">
                         <video
                           controls
                           className="w-full max-h-64 rounded-lg bg-black border border-slate-800 object-contain shadow-lg"
                           src={previewData.media_data_url}
                           preload="metadata"
+                          onError={() => setVideoError(true)}
                         />
                         <div className="w-full flex justify-between items-center text-[10px] text-slate-400 mt-2 font-mono px-1">
                           <span className="text-purple-400 font-semibold">{previewFile.extension.toUpperCase()} {language === 'en' ? 'Video' : 'Vídeo'}</span>
@@ -2082,10 +2118,17 @@ export default function App() {
                         </div>
                       </div>
                     ) : (
-                      <div className="py-8 text-center text-slate-500">
+                      <div className="py-8 text-center text-slate-500 w-full">
                         <Video className="w-10 h-10 mx-auto mb-2 text-slate-600" />
-                        <p className="text-xs">
-                          {language === 'en' ? 'Video preview could not be streamed.' : 'Prévia de vídeo não pôde ser reproduzida.'}
+                        <p className="text-xs font-medium text-slate-300 mb-1">
+                          {language === 'en'
+                            ? 'Direct inline playback unavailable for this video format/size.'
+                            : 'Reprodução direta embutida indisponível para este formato/tamanho.'}
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          {language === 'en'
+                            ? 'Use "Save File Copy" below to restore and watch in your native player.'
+                            : 'Use "Salvar Cópia" abaixo para restaurar e assistir no player nativo.'}
                         </p>
                       </div>
                     )}

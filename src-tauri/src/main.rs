@@ -32,6 +32,7 @@ struct AppState {
     cancel_token: CancellationToken,
     last_discovered: Vec<RecoveredFile>,
     current_source_id: String,
+    thumbnail_cache: Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
 }
 
 #[derive(serde::Serialize)]
@@ -46,13 +47,21 @@ fn load_thumbnail_for_file(
     file: &RecoveredFile,
     source_id: &str,
     reader_cache: &mut std::collections::HashMap<String, Box<dyn BlockReader>>,
+    thumbnail_cache: &Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
 ) -> Option<String> {
     if file.category != recovery_core::FileCategory::Image {
         return None;
     }
 
-    let effective_size = if file.size_bytes > 0 { file.size_bytes as usize } else { 2 * 1024 * 1024 };
-    let read_limit = effective_size.min(4 * 1024 * 1024).max(16 * 1024);
+    let cache_key = format!("{}_{}", file.id, file.source_offset);
+    if let Ok(cache) = thumbnail_cache.lock() {
+        if let Some(cached) = cache.get(&cache_key) {
+            return cached.clone();
+        }
+    }
+
+    let effective_size = if file.size_bytes > 0 { file.size_bytes as usize } else { 256 * 1024 };
+    let read_limit = effective_size.min(384 * 1024).max(16 * 1024);
 
     let buf_opt = if let Some(ref orig_path) = file.original_path {
         if !orig_path.is_empty() && Path::new(orig_path).is_file() {
@@ -95,14 +104,25 @@ fn load_thumbnail_for_file(
         }
     };
 
-    if let Some(buf) = buf_opt {
+    let thumb = if let Some(buf) = buf_opt {
         generate_thumbnail_data_url(&buf, &file.extension)
     } else {
         None
+    };
+
+    if let Ok(mut cache) = thumbnail_cache.lock() {
+        cache.insert(cache_key, thumb.clone());
     }
+
+    thumb
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    std::env::set_var(
+        "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+        "--allow-file-access-from-files",
+    );
+
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -116,6 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cancel_token: CancellationToken::new(),
         last_discovered: Vec::new(),
         current_source_id: String::new(),
+        thumbnail_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
     }));
 
     let html_content = include_str!("../../dist/index.html");
@@ -200,6 +221,9 @@ fn handle_ipc_message(
             if let Ok(mut st) = state.lock() {
                 st.cancel_token = cancel.clone();
                 st.current_source_id = source_id.clone();
+                if let Ok(mut tc) = st.thumbnail_cache.lock() {
+                    tc.clear();
+                }
             }
 
             let proxy_clone = proxy.clone();
@@ -336,12 +360,17 @@ fn handle_ipc_message(
                             }
                         }
 
+                        let thumb_cache = state_clone
+                            .lock()
+                            .map(|st| Arc::clone(&st.thumbnail_cache))
+                            .unwrap_or_else(|_| Arc::new(Mutex::new(std::collections::HashMap::new())));
+
                         let mut reader_cache: std::collections::HashMap<String, Box<dyn BlockReader>> = std::collections::HashMap::new();
                         let initial_page: Vec<PageItem> = files
                             .iter()
                             .take(20)
                             .map(|f| {
-                                let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache);
+                                let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache, &thumb_cache);
                                 PageItem {
                                     file: f.clone(),
                                     thumbnail_url: thumb,
@@ -384,12 +413,17 @@ fn handle_ipc_message(
                                 *c = serde_json::Value::from(n + 1);
                             }
                         }
+                        let thumb_cache = state_clone
+                            .lock()
+                            .map(|st| Arc::clone(&st.thumbnail_cache))
+                            .unwrap_or_else(|_| Arc::new(Mutex::new(std::collections::HashMap::new())));
+
                         let mut reader_cache: std::collections::HashMap<String, Box<dyn BlockReader>> = std::collections::HashMap::new();
                         let initial_page: Vec<PageItem> = preserved_files
                             .iter()
                             .take(20)
                             .map(|f| {
-                                let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache);
+                                let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache, &thumb_cache);
                                 PageItem {
                                     file: f.clone(),
                                     thumbnail_url: thumb,
@@ -437,20 +471,27 @@ fn handle_ipc_message(
 
             emit_log("info", &format!("Generating pre-recovery preview for '{}' (ext: {}, offset: 0x{:X}, size: {} bytes)...", if orig_path.is_empty() { source_id } else { orig_path }, ext, offset, size), proxy);
 
-            let effective_size = if size > 0 { size as usize } else { 4 * 1024 * 1024 };
-            let read_limit = effective_size.min(12 * 1024 * 1024).max(64 * 1024);
+            let effective_size = if size > 0 { size as usize } else { 2 * 1024 * 1024 };
+            let read_limit = effective_size.min(4 * 1024 * 1024).max(64 * 1024);
 
             let preview = if !orig_path.is_empty() && Path::new(orig_path).is_file() {
-                // If original file exists on filesystem (e.g. from Quick Scan), read it directly!
-                if let Ok(mut f) = std::fs::File::open(orig_path) {
+                let cat = recovery_core::FileCategory::from_extension(ext);
+                if cat == recovery_core::FileCategory::Audio || cat == recovery_core::FileCategory::Video {
+                    let mut prev = generate_preview(&[], ext);
+                    let p_clean = orig_path.replace('\\', "/");
+                    prev.media_data_url = Some(format!("file:///{}", p_clean));
+                    if let Ok(mut f) = std::fs::File::open(orig_path) {
+                        use std::io::Read;
+                        let mut h_buf = vec![0u8; 512];
+                        let n = f.read(&mut h_buf).unwrap_or(0);
+                        h_buf.truncate(n);
+                        prev.hex_dump = file_preview::generate_hex_dump(&h_buf, 512);
+                    }
+                    prev
+                } else if let Ok(mut f) = std::fs::File::open(orig_path) {
                     use std::io::Read;
                     let mut buf = vec![0u8; read_limit];
                     let n = f.read(&mut buf).unwrap_or(0);
-                    buf.truncate(n);
-                    generate_preview(&buf, ext)
-                } else if let Ok(mut reader) = open_block_reader(source_id) {
-                    let mut buf = vec![0u8; read_limit];
-                    let n = reader.read_at(offset, &mut buf).unwrap_or(0);
                     buf.truncate(n);
                     generate_preview(&buf, ext)
                 } else {
@@ -577,13 +618,14 @@ fn handle_ipc_message(
                 let safe_page = page.min(total_pages);
                 let start_idx = (safe_page - 1) * page_size;
 
+                let thumb_cache = Arc::clone(&st.thumbnail_cache);
                 let mut reader_cache: std::collections::HashMap<String, Box<dyn BlockReader>> = std::collections::HashMap::new();
                 let page_items: Vec<PageItem> = filtered
                     .into_iter()
                     .skip(start_idx)
                     .take(page_size)
                     .map(|f| {
-                        let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache);
+                        let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache, &thumb_cache);
                         PageItem {
                             file: (*f).clone(),
                             thumbnail_url: thumb,
@@ -775,37 +817,40 @@ fn handle_ipc_message(
             };
 
             let cancel = CancellationToken::new();
+            let proxy_clone = proxy.clone();
 
-            emit_log(
-                "info",
-                &format!("Starting extraction of {} files to safe target: '{}'", files.len(), dest_path),
-                proxy,
-            );
+            thread::spawn(move || {
+                emit_log(
+                    "info",
+                    &format!("Starting extraction of {} files to safe target: '{}'", files.len(), dest_path),
+                    &proxy_clone,
+                );
 
-            let mut report_md = String::new();
-            if let Ok(mut reader) = open_block_reader(&source_id) {
-                if let Ok(report) = Scanner::recover_files(
-                    &mut *reader,
-                    &files,
-                    Path::new(&dest_path),
-                    &cancel,
-                    |_f, _d, _t| {},
-                ) {
-                    emit_log(
-                        "success",
-                        &format!("Recovery completed: {} files written to '{}'", files.len(), dest_path),
-                        proxy,
-                    );
-                    report_md = report.to_markdown();
+                let mut report_md = String::new();
+                if let Ok(mut reader) = open_block_reader(&source_id) {
+                    if let Ok(report) = Scanner::recover_files(
+                        &mut *reader,
+                        &files,
+                        Path::new(&dest_path),
+                        &cancel,
+                        |_f, _d, _t| {},
+                    ) {
+                        emit_log(
+                            "success",
+                            &format!("Recovery completed: {} files written to '{}'", files.len(), dest_path),
+                            &proxy_clone,
+                        );
+                        report_md = report.to_markdown();
+                    }
                 }
-            }
 
-            let json = serde_json::json!({
-                "success": true,
-                "report_markdown": report_md
-            })
-            .to_string();
-            emit_response(msg_id, &json, proxy);
+                let json = serde_json::json!({
+                    "success": true,
+                    "report_markdown": report_md
+                })
+                .to_string();
+                emit_response(msg_id, &json, &proxy_clone);
+            });
         }
         "open_output_folder" => {
             if let Some(path) = msg.payload.get("path").and_then(|v| v.as_str()) {
