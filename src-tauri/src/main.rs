@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use device_access::{enumerate_devices, open_block_reader};
-use file_preview::generate_preview;
+use device_access::{enumerate_devices, open_block_reader, BlockReader};
+use file_preview::{generate_preview, generate_thumbnail_data_url};
 use image_repair::repair_image;
 use recovery_core::{CancellationToken, RecoveredFile, RecoveryError};
 use scanner::Scanner;
@@ -339,6 +339,75 @@ fn handle_ipc_message(
 
             let json = serde_json::to_string(&preview).unwrap_or_else(|_| "{}".to_string());
             emit_response(msg_id, &json, proxy);
+        }
+        "get_thumbnails" => {
+            let items = msg.payload.get("items").and_then(|v| v.as_array());
+            let mut results = serde_json::Map::new();
+
+            if let Some(items) = items {
+                let mut reader_cache: std::collections::HashMap<String, Box<dyn BlockReader>> = std::collections::HashMap::new();
+
+                for item in items {
+                    let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+                    if id.is_empty() {
+                        continue;
+                    }
+                    let source_id = item.get("source_id").and_then(|v| v.as_str()).unwrap_or_default();
+                    let offset = item.get("source_offset").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let size = item.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let ext = item.get("extension").and_then(|v| v.as_str()).unwrap_or_default();
+                    let orig_path = item.get("original_path").and_then(|v| v.as_str()).unwrap_or_default();
+
+                    let effective_size = if size > 0 { size as usize } else { 2 * 1024 * 1024 };
+                    let read_limit = effective_size.min(4 * 1024 * 1024).max(16 * 1024);
+
+                    let buf_opt = if !orig_path.is_empty() && Path::new(orig_path).is_file() {
+                        if let Ok(mut f) = std::fs::File::open(orig_path) {
+                            use std::io::Read;
+                            let mut buf = vec![0u8; read_limit];
+                            let n = f.read(&mut buf).unwrap_or(0);
+                            buf.truncate(n);
+                            Some(buf)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let buf_opt = match buf_opt {
+                        Some(b) => Some(b),
+                        None => {
+                            if !source_id.is_empty() {
+                                if !reader_cache.contains_key(source_id) {
+                                    if let Ok(r) = open_block_reader(source_id) {
+                                        reader_cache.insert(source_id.to_string(), r);
+                                    }
+                                }
+                                if let Some(r) = reader_cache.get_mut(source_id) {
+                                    let mut buf = vec![0u8; read_limit];
+                                    let n = r.read_at(offset, &mut buf).unwrap_or(0);
+                                    buf.truncate(n);
+                                    Some(buf)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                    };
+
+                    if let Some(buf) = buf_opt {
+                        if let Some(thumb) = generate_thumbnail_data_url(&buf, ext) {
+                            results.insert(id.to_string(), serde_json::Value::String(thumb));
+                        }
+                    }
+                }
+            }
+
+            let resp = serde_json::json!({ "thumbnails": results });
+            emit_response(msg_id, &resp.to_string(), proxy);
         }
         "repair_file" => {
             let source_id = msg.payload.get("source_id").and_then(|v| v.as_str()).unwrap_or_default();

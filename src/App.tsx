@@ -165,9 +165,9 @@ export default function App() {
   const [isPreparingResults, setIsPreparingResults] = useState<boolean>(false);
   const [preparingCount, setPreparingCount] = useState<number>(0);
 
-  // Auto-preview on hover state
-  const [autoPreviewHover, setAutoPreviewHover] = useState<boolean>(true);
-  const hoverTimerRef = useRef<any>(null);
+  // Image thumbnails cache: { [fileId]: dataUrl }
+  const [imageThumbnails, setImageThumbnails] = useState<Record<string, string>>({});
+  const requestedThumbnailsRef = useRef<Set<string>>(new Set());
   const activePreviewIdRef = useRef<string | null>(null);
 
   const appendLog = (level: 'info' | 'warn' | 'error' | 'success', message: string, timestamp?: string) => {
@@ -346,6 +346,8 @@ export default function App() {
 
   const handleStartScan = () => {
     if (!selectedSource) return;
+    setImageThumbnails({});
+    requestedThumbnailsRef.current.clear();
     setIsScanning(true);
     setScanError(null);
     setCurrentStep(4);
@@ -426,8 +428,24 @@ export default function App() {
     activePreviewIdRef.current = file.id;
     setPreviewFile(file);
     setRepairReport(null);
-    setPreviewData(null);
     setPreviewTab('media');
+
+    // If thumbnail already cached for image, pre-seed previewData for instant visual feedback
+    if (file.category === 'Image' && imageThumbnails[file.id]) {
+      setPreviewData({
+        preview_type: 'image',
+        thumbnail_base64: imageThumbnails[file.id],
+        media_data_url: imageThumbnails[file.id],
+        hex_dump: [],
+        metadata_entries: [
+          [language === 'en' ? 'Format' : 'Formato', file.extension.toUpperCase()],
+          [language === 'en' ? 'File Size' : 'Tamanho do Arquivo', `${(file.size_bytes / 1024).toFixed(1)} KB`],
+        ],
+      });
+    } else {
+      setPreviewData(null);
+    }
+
     const data = await sendIpc('get_file_preview', {
       source_id: selectedSource?.id,
       source_offset: file.source_offset,
@@ -438,15 +456,6 @@ export default function App() {
     if (activePreviewIdRef.current === file.id) {
       setPreviewData(data);
     }
-  };
-
-  const handleFileHover = (file: RecoveredFile) => {
-    if (!autoPreviewHover) return;
-    if (previewFile?.id === file.id) return;
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = setTimeout(() => {
-      openPreview(file);
-    }, 140);
   };
 
   const handleRepairCopy = async () => {
@@ -515,6 +524,36 @@ export default function App() {
       setSelectedFileIds(new Set(filteredFiles.map((f) => f.id)));
     }
   };
+
+  // Batch fetch thumbnails for visible images on current page
+  useEffect(() => {
+    if (currentStep !== 5) return;
+    const imageFiles = paginatedFiles.filter(
+      (f) => f.category === 'Image' && !imageThumbnails[f.id] && !requestedThumbnailsRef.current.has(f.id)
+    );
+    if (imageFiles.length === 0) return;
+
+    imageFiles.forEach((f) => requestedThumbnailsRef.current.add(f.id));
+
+    const batchPayload = imageFiles.map((f) => ({
+      id: f.id,
+      source_id: selectedSource?.id,
+      source_offset: f.source_offset,
+      size_bytes: f.size_bytes,
+      extension: f.extension,
+      original_path: f.original_path,
+    }));
+
+    sendIpc('get_thumbnails', { items: batchPayload })
+      .then((res: any) => {
+        if (res && res.thumbnails && Object.keys(res.thumbnails).length > 0) {
+          setImageThumbnails((prev) => ({ ...prev, ...res.thumbnails }));
+        }
+      })
+      .catch((err) => {
+        console.error('Failed to load thumbnails:', err);
+      });
+  }, [paginatedFiles, currentStep, selectedSource, imageThumbnails]);
 
   const getCategoryIcon = (cat: string) => {
     switch (cat) {
@@ -1280,26 +1319,6 @@ export default function App() {
                   <strong className="text-sky-400">{selectedFileIds.size}</strong> {language === 'en' ? 'of' : 'de'} {filteredFiles.length}
                 </div>
 
-                {/* Auto-Preview on Hover Toggle */}
-                <button
-                  onClick={() => setAutoPreviewHover(!autoPreviewHover)}
-                  className={`px-2.5 py-1.5 rounded-lg border text-xs transition flex items-center gap-1.5 select-none ${
-                    autoPreviewHover
-                      ? 'bg-sky-500/20 border-sky-500/40 text-sky-300 font-medium'
-                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-                  }`}
-                  title={
-                    language === 'en'
-                      ? 'Hover over files to preview without clicking'
-                      : 'Passar o mouse sobre os arquivos para pré-visualizar sem precisar clicar'
-                  }
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span className="hidden lg:inline">
-                    {language === 'en' ? 'Hover Preview' : 'Auto Prévia'}
-                  </span>
-                </button>
-
                 {/* View Mode Toggle */}
                 <div className="flex items-center border border-slate-800 rounded-lg overflow-hidden">
                   <button
@@ -1372,7 +1391,6 @@ export default function App() {
                         <tr
                           key={file.id}
                           onClick={() => openPreview(file)}
-                          onMouseEnter={() => handleFileHover(file)}
                           className={`transition cursor-pointer group select-none ${
                             isCurrentPreview
                               ? 'bg-sky-500/15 border-l-2 border-sky-400'
@@ -1398,7 +1416,16 @@ export default function App() {
                             />
                           </td>
                           <td className="py-2 px-3 flex items-center gap-2 font-mono">
-                            {getCategoryIcon(file.category)}
+                            {file.category === 'Image' && imageThumbnails[file.id] ? (
+                              <img
+                                src={imageThumbnails[file.id]}
+                                alt={file.filename}
+                                className="w-5 h-5 object-cover rounded border border-slate-700/80 shrink-0 select-none"
+                                loading="lazy"
+                              />
+                            ) : (
+                              getCategoryIcon(file.category)
+                            )}
                             <span className={`font-medium truncate max-w-xs ${isCurrentPreview ? 'text-sky-300 font-semibold' : 'text-slate-200'}`}>
                               {file.filename}
                             </span>
@@ -1439,7 +1466,6 @@ export default function App() {
                       <div
                         key={file.id}
                         onClick={() => openPreview(file)}
-                        onMouseEnter={() => handleFileHover(file)}
                         className={`p-3 rounded-xl border transition flex flex-col justify-between cursor-pointer group select-none ${
                           isCurrentPreview
                             ? 'border-sky-400 bg-sky-500/15 shadow-md shadow-sky-500/10 ring-1 ring-sky-400/50'
@@ -1470,12 +1496,21 @@ export default function App() {
                         </div>
 
                         {/* Content Quick Glance Area in Grid Card */}
-                        <div className="h-16 rounded-lg bg-black/40 border border-slate-800/80 mb-2 flex items-center justify-center p-2 text-center overflow-hidden">
+                        <div className="h-16 rounded-lg bg-black/40 border border-slate-800/80 mb-2 flex items-center justify-center p-1.5 text-center overflow-hidden">
                           {file.category === 'Image' ? (
-                            <div className="flex flex-col items-center text-slate-400 group-hover:text-sky-300 transition-colors">
-                              <ImageIcon className="w-6 h-6 mb-1 opacity-80" />
-                              <span className="text-[10px] font-mono uppercase">{file.extension} {language === 'en' ? 'Image' : 'Imagem'}</span>
-                            </div>
+                            imageThumbnails[file.id] ? (
+                              <img
+                                src={imageThumbnails[file.id]}
+                                alt={file.filename}
+                                className="max-h-full max-w-full object-contain rounded select-none group-hover:scale-105 transition-transform duration-200"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center text-slate-400 group-hover:text-sky-300 transition-colors">
+                                <ImageIcon className="w-6 h-6 mb-1 opacity-80" />
+                                <span className="text-[10px] font-mono uppercase">{file.extension} {language === 'en' ? 'Image' : 'Imagem'}</span>
+                              </div>
+                            )
                           ) : file.category === 'Audio' ? (
                             <div className="flex flex-col items-center text-amber-400/80 group-hover:text-amber-300 transition-colors">
                               <Volume2 className="w-6 h-6 mb-1 opacity-80" />

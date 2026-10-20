@@ -47,7 +47,7 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
                 None
             };
 
-            if let Some(mut img_prev) = generate_image_preview(data) {
+            if let Some(mut img_prev) = generate_image_preview(data, extension) {
                 img_prev.media_data_url = media_url;
                 img_prev.hex_dump = hex_lines;
                 return img_prev;
@@ -182,13 +182,31 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
     }
 }
 
-pub fn generate_image_preview(data: &[u8]) -> Option<PreviewData> {
+pub fn generate_image_preview(data: &[u8], extension: &str) -> Option<PreviewData> {
     if data.len() < 16 {
         return None;
     }
 
     let cursor = Cursor::new(data);
-    let reader = ImageReader::new(cursor).with_guessed_format().ok()?;
+    let reader = ImageReader::new(cursor);
+    let reader = if let Ok(guessed) = reader.with_guessed_format() {
+        if guessed.format().is_some() {
+            guessed
+        } else if let Some(fmt) = ImageFormat::from_extension(extension) {
+            let mut r = ImageReader::new(Cursor::new(data));
+            r.set_format(fmt);
+            r
+        } else {
+            guessed
+        }
+    } else if let Some(fmt) = ImageFormat::from_extension(extension) {
+        let mut r = ImageReader::new(Cursor::new(data));
+        r.set_format(fmt);
+        r
+    } else {
+        return None;
+    };
+
     let format = reader.format()?;
     let img = reader.decode().ok()?;
 
@@ -215,6 +233,39 @@ pub fn generate_image_preview(data: &[u8]) -> Option<PreviewData> {
             ("Raw Size".to_string(), format!("{} bytes", data.len())),
         ],
     })
+}
+
+pub fn generate_thumbnail_data_url(data: &[u8], extension: &str) -> Option<String> {
+    if data.len() < 8 {
+        return None;
+    }
+
+    // Try decoding image with image crate to make a clean compact thumbnail
+    if let Some(prev) = generate_image_preview(data, extension) {
+        if let Some(thumb) = prev.thumbnail_base64 {
+            return Some(thumb);
+        }
+    }
+
+    // Fallback: If image crate decode failed (or format is SVG/WebP/ICO/partial data),
+    // encode directly as a data URL up to 2MB so the browser's native renderer can display it!
+    let mime = match extension.to_lowercase().as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        _ => "image/png",
+    };
+
+    let slice_limit = data.len().min(2 * 1024 * 1024);
+    if slice_limit > 0 {
+        Some(format!("data:{};base64,{}", mime, BASE64.encode(&data[..slice_limit])))
+    } else {
+        None
+    }
 }
 
 pub fn generate_hex_dump(data: &[u8], max_bytes: usize) -> Vec<HexLine> {
