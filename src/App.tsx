@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   HardDrive,
   FileSearch,
@@ -143,12 +143,14 @@ export default function App() {
 
   // Terminal & Diagnostics state
   const [showTerminal, setShowTerminal] = useState<boolean>(true);
+  const [terminalHeight, setTerminalHeight] = useState<number>(160);
+  const [isDraggingTerminal, setIsDraggingTerminal] = useState<boolean>(false);
   const [terminalLogs, setTerminalLogs] = useState<LogEntry[]>([
     {
       id: 'init-1',
       timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
       level: 'info',
-      message: 'OpenRe v0.1.3 engine initialized in strict offline-first mode. Zero telemetry active.',
+      message: 'OpenRe v0.1.4 engine initialized in strict offline-first mode. Zero telemetry active.',
     },
     {
       id: 'init-2',
@@ -158,6 +160,15 @@ export default function App() {
     },
   ]);
   const terminalEndRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Preloader & Indexing state
+  const [isPreparingResults, setIsPreparingResults] = useState<boolean>(false);
+  const [preparingCount, setPreparingCount] = useState<number>(0);
+
+  // Auto-preview on hover state
+  const [autoPreviewHover, setAutoPreviewHover] = useState<boolean>(true);
+  const hoverTimerRef = useRef<any>(null);
+  const activePreviewIdRef = useRef<string | null>(null);
 
   const appendLog = (level: 'info' | 'warn' | 'error' | 'success', message: string, timestamp?: string) => {
     const timeStr = timestamp || new Date().toLocaleTimeString('en-US', { hour12: false });
@@ -175,6 +186,28 @@ export default function App() {
       terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [terminalLogs, showTerminal]);
+
+  // Terminal vertical resize listener
+  useEffect(() => {
+    if (!isDraggingTerminal) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      const newHeight = window.innerHeight - e.clientY;
+      setTerminalHeight(Math.max(80, Math.min(550, newHeight)));
+    };
+    const handleMouseUp = () => {
+      setIsDraggingTerminal(false);
+    };
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingTerminal]);
 
 
   // Preview Drawer state
@@ -269,10 +302,31 @@ export default function App() {
         setIsScanning(false);
         setScanError(null);
         const filesList = Array.isArray(payload.files) ? payload.files : [];
-        setDiscoveredFiles(filesList);
-        setSelectedFileIds(new Set(filesList.map((f: any) => f.id)));
-        setCurrentStep(5);
-        appendLog('success', `Scan complete. Found ${filesList.length} recoverable items.`);
+        setPreparingCount(filesList.length);
+        setIsPreparingResults(true);
+
+        appendLog(
+          'info',
+          language === 'en'
+            ? `Scan finalized. Structuring and indexing catalog for ${filesList.length} files...`
+            : `Varredura finalizada. Estruturando e indexando catálogo para ${filesList.length} arquivos...`
+        );
+
+        setTimeout(() => {
+          setDiscoveredFiles(filesList);
+          setSelectedFileIds(new Set(filesList.map((f: any) => f.id)));
+          if (filesList.length > 0) {
+            openPreview(filesList[0]);
+          }
+          setIsPreparingResults(false);
+          setCurrentStep(5);
+          appendLog(
+            'success',
+            language === 'en'
+              ? `Catalog ready. Displaying ${filesList.length} recoverable items.`
+              : `Catálogo pronto. Exibindo ${filesList.length} itens recuperáveis.`
+          );
+        }, 350);
       } else if (type === 'scan_error') {
         setIsScanning(false);
         setScanError(payload.error || 'Scan stopped due to an error.');
@@ -357,6 +411,7 @@ export default function App() {
   };
 
   const openPreview = async (file: RecoveredFile) => {
+    activePreviewIdRef.current = file.id;
     setPreviewFile(file);
     setRepairReport(null);
     setPreviewData(null);
@@ -368,7 +423,18 @@ export default function App() {
       extension: file.extension,
       original_path: file.original_path,
     });
-    setPreviewData(data);
+    if (activePreviewIdRef.current === file.id) {
+      setPreviewData(data);
+    }
+  };
+
+  const handleFileHover = (file: RecoveredFile) => {
+    if (!autoPreviewHover) return;
+    if (previewFile?.id === file.id) return;
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => {
+      openPreview(file);
+    }, 140);
   };
 
   const handleRepairCopy = async () => {
@@ -470,7 +536,7 @@ export default function App() {
           <div>
             <div className="font-semibold text-base tracking-wide flex items-center gap-2">
               OpenRe
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.3</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.4</span>
             </div>
             <div className="text-[11px] text-slate-400">Professional File Recovery</div>
           </div>
@@ -923,10 +989,32 @@ export default function App() {
           </div>
         )}
 
-        {/* STEP 4: Scanning Screen */}
+        {/* STEP 4: Scanning Screen / Preloader */}
         {currentStep === 4 && (
           <div className="flex-1 min-h-0 flex flex-col items-center justify-center max-w-2xl mx-auto w-full p-4">
-            {scanError ? (
+            {isPreparingResults ? (
+              <div className="w-full bg-slate-900 border border-sky-500/30 rounded-2xl p-8 text-center shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
+                  <div className="absolute inset-0 rounded-full border-4 border-sky-500/20 border-t-sky-400 animate-spin" />
+                  <div
+                    className="absolute inset-2 rounded-full border-4 border-indigo-500/20 border-b-indigo-400 animate-spin"
+                    style={{ animationDirection: 'reverse', animationDuration: '1.2s' }}
+                  />
+                  <Database className="w-8 h-8 text-sky-400 animate-pulse" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-100 mb-2">
+                  {language === 'en' ? 'Structuring & Indexing Catalog...' : 'Estruturando e Indexando Catálogo...'}
+                </h2>
+                <p className="text-xs text-slate-400 mb-6 max-w-md mx-auto leading-relaxed">
+                  {language === 'en'
+                    ? `Cataloging ${preparingCount.toLocaleString()} recovered files, organizing partitions, and building high-performance view...`
+                    : `Catalogando ${preparingCount.toLocaleString()} arquivos localizados, organizando limites de setores e preparando exibição de alta performance...`}
+                </p>
+                <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden shadow-inner">
+                  <div className="bg-gradient-to-r from-sky-400 via-indigo-500 to-sky-400 h-full w-full animate-pulse" />
+                </div>
+              </div>
+            ) : scanError ? (
               <div className="w-full bg-slate-900 border border-rose-500/40 rounded-2xl p-6 text-center shadow-xl">
                 <div className="w-14 h-14 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto mb-4">
                   <AlertTriangle className="w-7 h-7" />
@@ -1017,7 +1105,7 @@ export default function App() {
 
         {/* STEP 5: Review Results */}
         {currentStep === 5 && (
-          <div className="flex-1 min-h-0 flex flex-col h-full overflow-hidden">
+          <div className={`flex-1 min-h-0 flex flex-col h-full overflow-hidden transition-all duration-150 ${previewFile ? 'mr-[490px]' : ''}`}>
             <div className="shrink-0 flex items-center justify-between gap-4 mb-3 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <input
@@ -1025,7 +1113,7 @@ export default function App() {
                   placeholder={language === 'en' ? "Filter by name or extension..." : "Filtrar por nome ou extensão..."}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 w-60"
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 w-52 sm:w-60"
                 />
 
                 <select
@@ -1042,14 +1130,14 @@ export default function App() {
                   <option value="Text">{language === 'en' ? 'Text' : 'Texto'}</option>
                 </select>
 
-                <div className="flex items-center gap-1.5 ml-2">
+                <div className="flex items-center gap-1.5 ml-1">
                   <button
                     onClick={toggleSelectPage}
                     className="px-2 py-1 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-300 transition"
                   >
                     {isPageFullySelected
-                      ? (language === 'en' ? 'Deselect Page' : 'Desmarcar Página')
-                      : (language === 'en' ? 'Select Page' : 'Marcar Página')}
+                      ? (language === 'en' ? 'Deselect Page' : 'Desmarcar Pág')
+                      : (language === 'en' ? 'Select Page' : 'Marcar Pág')}
                   </button>
                   <button
                     onClick={toggleSelectAllFiltered}
@@ -1062,30 +1150,56 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-3">
-                <div className="text-xs text-slate-400 font-mono">
-                  <strong className="text-sky-400">{selectedFileIds.size}</strong> of {filteredFiles.length} selected
+              <div className="flex items-center gap-2">
+                <div className="text-xs text-slate-400 font-mono hidden md:block">
+                  <strong className="text-sky-400">{selectedFileIds.size}</strong> of {filteredFiles.length}
                 </div>
 
+                {/* Auto-Preview on Hover Toggle */}
+                <button
+                  onClick={() => setAutoPreviewHover(!autoPreviewHover)}
+                  className={`px-2.5 py-1.5 rounded-lg border text-xs transition flex items-center gap-1.5 select-none ${
+                    autoPreviewHover
+                      ? 'bg-sky-500/20 border-sky-500/40 text-sky-300 font-medium'
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+                  }`}
+                  title={
+                    language === 'en'
+                      ? 'Hover over files to preview without clicking'
+                      : 'Passar o mouse sobre os arquivos para pré-visualizar sem precisar clicar'
+                  }
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span className="hidden lg:inline">
+                    {language === 'en' ? 'Hover Preview' : 'Auto Prévia'}
+                  </span>
+                </button>
+
+                {/* View Mode Toggle */}
                 <div className="flex items-center border border-slate-800 rounded-lg overflow-hidden">
                   <button
                     onClick={() => setViewMode('list')}
                     className={`p-1.5 ${viewMode === 'list' ? 'bg-slate-800 text-sky-400' : 'text-slate-400 hover:text-slate-200'}`}
+                    title={language === 'en' ? 'List View' : 'Visualização em Lista'}
                   >
                     <List className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => setViewMode('grid')}
                     className={`p-1.5 ${viewMode === 'grid' ? 'bg-slate-800 text-sky-400' : 'text-slate-400 hover:text-slate-200'}`}
+                    title={language === 'en' ? 'Grid View' : 'Visualização em Grade'}
                   >
                     <LayoutGrid className="w-4 h-4" />
                   </button>
                 </div>
 
                 <button
-                  onClick={() => setCurrentStep(6)}
+                  onClick={() => {
+                    setPreviewFile(null);
+                    setCurrentStep(6);
+                  }}
                   disabled={selectedFileIds.size === 0}
-                  className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
+                  className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5 shrink-0"
                 >
                   {language === 'en' ? 'Proceed to Recover' : 'Avançar para Recuperação'} ({selectedFileIds.size}) <ArrowRight className="w-3.5 h-3.5" />
                 </button>
@@ -1125,77 +1239,148 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-850">
-                    {paginatedFiles.map((file) => (
-                      <tr key={file.id} className="hover:bg-slate-900/60 transition group">
-                        <td className="py-2 px-3">
-                          <input
-                            type="checkbox"
-                            checked={selectedFileIds.has(file.id)}
-                            onChange={(e) => {
-                              const next = new Set(selectedFileIds);
-                              if (e.target.checked) next.add(file.id);
-                              else next.delete(file.id);
-                              setSelectedFileIds(next);
-                            }}
-                          />
-                        </td>
-                        <td className="py-2 px-3 flex items-center gap-2 font-mono">
-                          {getCategoryIcon(file.category)}
-                          <span className="font-medium text-slate-200">{file.filename}</span>
-                        </td>
-                        <td className="py-2 px-3 text-slate-400">{file.category}</td>
-                        <td className="py-2 px-3 text-slate-400 font-mono">
-                          {(file.size_bytes / 1024).toFixed(1)} KB
-                        </td>
-                        <td className="py-2 px-3">{getIntegrityBadge(file.integrity)}</td>
-                        <td className="py-2 px-3 text-right">
-                          <button
-                            onClick={() => openPreview(file)}
-                            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition inline-flex items-center gap-1"
+                    {paginatedFiles.map((file) => {
+                      const isSelected = selectedFileIds.has(file.id);
+                      const isCurrentPreview = previewFile?.id === file.id;
+
+                      return (
+                        <tr
+                          key={file.id}
+                          onClick={() => openPreview(file)}
+                          onMouseEnter={() => handleFileHover(file)}
+                          className={`transition cursor-pointer group select-none ${
+                            isCurrentPreview
+                              ? 'bg-sky-500/15 border-l-2 border-sky-400'
+                              : isSelected
+                              ? 'bg-slate-900/80 hover:bg-slate-850'
+                              : 'hover:bg-slate-900/60'
+                          }`}
+                        >
+                          <td
+                            className="py-2 px-3"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <Eye className="w-3.5 h-3.5" /> {language === 'en' ? 'Preview' : 'Visualizar'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                const next = new Set(selectedFileIds);
+                                if (e.target.checked) next.add(file.id);
+                                else next.delete(file.id);
+                                setSelectedFileIds(next);
+                              }}
+                              className="cursor-pointer"
+                            />
+                          </td>
+                          <td className="py-2 px-3 flex items-center gap-2 font-mono">
+                            {getCategoryIcon(file.category)}
+                            <span className={`font-medium truncate max-w-xs ${isCurrentPreview ? 'text-sky-300 font-semibold' : 'text-slate-200'}`}>
+                              {file.filename}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-slate-400">{file.category}</td>
+                          <td className="py-2 px-3 text-slate-400 font-mono">
+                            {(file.size_bytes / 1024).toFixed(1)} KB
+                          </td>
+                          <td className="py-2 px-3">{getIntegrityBadge(file.integrity)}</td>
+                          <td className="py-2 px-3 text-right">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openPreview(file);
+                              }}
+                              className={`px-2 py-1 rounded text-xs transition inline-flex items-center gap-1 ${
+                                isCurrentPreview
+                                  ? 'bg-sky-600 text-white font-medium shadow-sm'
+                                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                              }`}
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>{language === 'en' ? 'Preview' : 'Visualizar'}</span>
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               ) : (
-                <div className="grid grid-cols-4 gap-3 p-1">
-                  {paginatedFiles.map((file) => (
-                    <div
-                      key={file.id}
-                      onClick={() => openPreview(file)}
-                      className={`p-3 rounded-lg border transition flex flex-col justify-between cursor-pointer ${
-                        selectedFileIds.has(file.id)
-                          ? 'border-sky-500/60 bg-sky-500/10'
-                          : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={selectedFileIds.has(file.id)}
+                <div className={`grid gap-3 p-1 ${previewFile ? 'grid-cols-2 md:grid-cols-3' : 'grid-cols-2 md:grid-cols-4'}`}>
+                  {paginatedFiles.map((file) => {
+                    const isSelected = selectedFileIds.has(file.id);
+                    const isCurrentPreview = previewFile?.id === file.id;
+
+                    return (
+                      <div
+                        key={file.id}
+                        onClick={() => openPreview(file)}
+                        onMouseEnter={() => handleFileHover(file)}
+                        className={`p-3 rounded-xl border transition flex flex-col justify-between cursor-pointer group select-none ${
+                          isCurrentPreview
+                            ? 'border-sky-400 bg-sky-500/15 shadow-md shadow-sky-500/10 ring-1 ring-sky-400/50'
+                            : isSelected
+                            ? 'border-sky-500/50 bg-sky-500/10'
+                            : 'border-slate-800 bg-slate-900/40 hover:border-slate-700 hover:bg-slate-900/70'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div
+                            className="flex items-center gap-2"
                             onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => {
-                              const next = new Set(selectedFileIds);
-                              if (e.target.checked) next.add(file.id);
-                              else next.delete(file.id);
-                              setSelectedFileIds(next);
-                            }}
-                          />
-                          {getCategoryIcon(file.category)}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                const next = new Set(selectedFileIds);
+                                if (e.target.checked) next.add(file.id);
+                                else next.delete(file.id);
+                                setSelectedFileIds(next);
+                              }}
+                              className="cursor-pointer"
+                            />
+                            {getCategoryIcon(file.category)}
+                          </div>
+                          {getIntegrityBadge(file.integrity)}
                         </div>
-                        {getIntegrityBadge(file.integrity)}
+
+                        {/* Content Quick Glance Area in Grid Card */}
+                        <div className="h-16 rounded-lg bg-black/40 border border-slate-800/80 mb-2 flex items-center justify-center p-2 text-center overflow-hidden">
+                          {file.category === 'Image' ? (
+                            <div className="flex flex-col items-center text-slate-400 group-hover:text-sky-300 transition-colors">
+                              <ImageIcon className="w-6 h-6 mb-1 opacity-80" />
+                              <span className="text-[10px] font-mono uppercase">{file.extension} Image</span>
+                            </div>
+                          ) : file.category === 'Audio' ? (
+                            <div className="flex flex-col items-center text-amber-400/80 group-hover:text-amber-300 transition-colors">
+                              <Volume2 className="w-6 h-6 mb-1 opacity-80" />
+                              <span className="text-[10px] font-mono uppercase">{file.extension} Audio</span>
+                            </div>
+                          ) : file.category === 'Video' ? (
+                            <div className="flex flex-col items-center text-purple-400/80 group-hover:text-purple-300 transition-colors">
+                              <Video className="w-6 h-6 mb-1 opacity-80" />
+                              <span className="text-[10px] font-mono uppercase">{file.extension} Stream</span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center text-slate-500 group-hover:text-slate-300 transition-colors">
+                              <FileText className="w-6 h-6 mb-1 opacity-80" />
+                              <span className="text-[10px] font-mono uppercase">{file.extension || 'Data'}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className={`font-mono text-xs truncate mb-1 ${isCurrentPreview ? 'text-sky-300 font-bold' : 'text-slate-200 font-medium'}`}>
+                          {file.filename}
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                          <span>{(file.size_bytes / 1024).toFixed(1)} KB</span>
+                          <span className={`transition ${isCurrentPreview ? 'text-sky-300 font-semibold underline' : 'text-sky-400 group-hover:underline'}`}>
+                            {language === 'en' ? 'Preview' : 'Ver'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="font-mono text-xs font-medium truncate text-slate-200 mb-1">{file.filename}</div>
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
-                        <span>{(file.size_bytes / 1024).toFixed(1)} KB</span>
-                        <span className="text-sky-400 hover:underline">{language === 'en' ? 'Preview' : 'Ver'}</span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1375,7 +1560,21 @@ export default function App() {
 
       {/* Docked Footer Diagnostic Terminal */}
       {showTerminal && (
-        <div className="shrink-0 border-t border-slate-800 bg-slate-950 flex flex-col transition-all duration-150 shadow-2xl z-30 select-none">
+        <div className="shrink-0 border-t border-slate-800 bg-slate-950 flex flex-col shadow-2xl z-30 select-none">
+          {/* Vertical Resize Drag Handle */}
+          <div
+            onMouseDown={(e) => {
+              e.preventDefault();
+              setIsDraggingTerminal(true);
+            }}
+            className={`h-2 w-full flex items-center justify-center cursor-row-resize transition-colors ${
+              isDraggingTerminal ? 'bg-sky-500' : 'bg-slate-900/90 hover:bg-sky-500/70'
+            }`}
+            title={language === 'en' ? 'Drag up or down to resize terminal' : 'Arraste para redimensionar o terminal'}
+          >
+            <div className="w-12 h-1 rounded-full bg-slate-600 hover:bg-white transition-colors" />
+          </div>
+
           {/* Terminal Titlebar */}
           <div className="h-8 px-4 bg-slate-900/90 border-b border-slate-800/80 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2.5">
@@ -1389,6 +1588,9 @@ export default function App() {
               </span>
               <span className="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] font-mono text-slate-400">
                 {terminalLogs.length} {language === 'en' ? 'events' : 'eventos'}
+              </span>
+              <span className="text-[10px] font-mono text-slate-500 hidden sm:inline">
+                ({terminalHeight}px)
               </span>
             </div>
 
@@ -1426,7 +1628,10 @@ export default function App() {
           </div>
 
           {/* Terminal Console Output */}
-          <div className="h-32 max-h-40 overflow-y-auto p-2.5 font-mono text-[11px] space-y-1 select-text bg-black/80">
+          <div
+            style={{ height: `${terminalHeight}px` }}
+            className="overflow-y-auto p-2.5 font-mono text-[11px] space-y-1 select-text bg-black/80"
+          >
             {terminalLogs.length === 0 ? (
               <p className="text-slate-500 italic text-center py-4">
                 {language === 'en' ? 'No log events. System ready.' : 'Nenhum evento registrado. Sistema pronto.'}
@@ -1463,7 +1668,10 @@ export default function App() {
 
       {/* Slide-out Preview Drawer */}
       {previewFile && (
-        <div className="fixed inset-y-0 right-0 w-[540px] bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col z-50">
+        <div
+          className="fixed right-0 w-[480px] bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col z-40 top-14 transition-all duration-150 animate-in slide-in-from-right"
+          style={{ bottom: showTerminal ? `${terminalHeight + 42}px` : 0 }}
+        >
           {/* Header */}
           <div className="p-4 border-b border-slate-800 flex items-center justify-between">
             <div className="font-semibold text-sm flex items-center gap-2 truncate">
