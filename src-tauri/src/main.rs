@@ -586,7 +586,7 @@ fn handle_ipc_message(
             let mut source_id = msg.payload.get("source_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             let page = page.max(1);
-            let page_size = page_size.max(1);
+            let page_size = page_size.clamp(1, 500);
 
             if let Ok(st) = state.lock() {
                 if source_id.is_empty() {

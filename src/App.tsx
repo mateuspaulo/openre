@@ -35,6 +35,7 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   Volume2,
@@ -544,11 +545,11 @@ export default function App() {
     []
   );
 
-  // Fetch page when page, pageSize, or filterCategory changes
+  // Fetch page when page, pageSize, filterCategory, or view step readiness changes
   useEffect(() => {
     if (currentStep !== 5 || isPreparingResults) return;
     fetchCatalogPage(currentPage, pageSize, filterCategory, searchQuery);
-  }, [currentPage, pageSize, filterCategory]);
+  }, [currentPage, pageSize, filterCategory, currentStep, isPreparingResults]);
 
   // Debounced fetch for search query changes
   useEffect(() => {
@@ -558,7 +559,7 @@ export default function App() {
       fetchCatalogPage(1, pageSize, filterCategory, searchQuery);
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [searchQuery, currentStep, isPreparingResults]);
 
   // Range and selection computations
   const safeCurrentPage = Math.min(Math.max(1, currentPage), Math.max(1, totalPages));
@@ -600,7 +601,7 @@ export default function App() {
         setDeselectedFileIds(next);
       } else {
         const next = new Set(selectedFileIds);
-        paginatedFiles.forEach((f) => next.delete(f.id));
+        paginatedFiles.forEach((f) => next.add(f.id));
         setSelectedFileIds(next);
       }
     }
@@ -1651,27 +1652,28 @@ export default function App() {
                 )}
               </div>
 
-              {/* Center: Page size buttons */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-slate-500 text-[11px] mr-1">
+              {/* Center: Chosen Select for Page Size (10, 20, 50, 100) */}
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 text-xs font-medium">
                   {language === 'en' ? 'Per page:' : 'Por página:'}
                 </span>
-                {[20, 50, 100, 200, 330].map((size) => (
-                  <button
-                    key={size}
-                    onClick={() => {
-                      setPageSize(size);
+                <div className="relative inline-flex items-center">
+                  <select
+                    value={pageSize}
+                    onChange={(e) => {
+                      const newSize = Number(e.target.value);
+                      setPageSize(newSize);
                       setCurrentPage(1);
                     }}
-                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition ${
-                      pageSize === size
-                        ? 'bg-sky-600 text-white font-bold shadow-sm'
-                        : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
-                    }`}
+                    className="appearance-none bg-slate-900 hover:bg-slate-850 border border-slate-750 hover:border-slate-600 focus:border-sky-500 text-slate-200 text-xs font-mono font-medium rounded-lg pl-3 pr-8 py-1 shadow-sm transition focus:outline-none cursor-pointer"
                   >
-                    {size}
-                  </button>
-                ))}
+                    <option value={10}>10 {language === 'en' ? 'items' : 'itens'}</option>
+                    <option value={20}>20 {language === 'en' ? 'items' : 'itens'}</option>
+                    <option value={50}>50 {language === 'en' ? 'items' : 'itens'}</option>
+                    <option value={100}>100 {language === 'en' ? 'items' : 'itens'}</option>
+                  </select>
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 pointer-events-none absolute right-2.5" />
+                </div>
               </div>
 
               {/* Right: Navigation controls */}
