@@ -304,6 +304,7 @@ export default function App() {
         const filesList = Array.isArray(payload.files) ? payload.files : [];
         setPreparingCount(filesList.length);
         setIsPreparingResults(true);
+        setCurrentStep(5);
 
         appendLog(
           'info',
@@ -318,15 +319,16 @@ export default function App() {
           if (filesList.length > 0) {
             openPreview(filesList[0]);
           }
-          setIsPreparingResults(false);
-          setCurrentStep(5);
-          appendLog(
-            'success',
-            language === 'en'
-              ? `Catalog ready. Displaying ${filesList.length} recoverable items.`
-              : `Catálogo pronto. Exibindo ${filesList.length} itens recuperáveis.`
-          );
-        }, 350);
+          setTimeout(() => {
+            setIsPreparingResults(false);
+            appendLog(
+              'success',
+              language === 'en'
+                ? `Catalog ready. Displaying ${filesList.length} recoverable items.`
+                : `Catálogo pronto. Exibindo ${filesList.length} itens recuperáveis.`
+            );
+          }, 850);
+        }, 200);
       } else if (type === 'scan_error') {
         setIsScanning(false);
         setScanError(payload.error || 'Scan stopped due to an error.');
@@ -1200,6 +1202,34 @@ export default function App() {
 
         {/* STEP 5: Review Results */}
         {currentStep === 5 && (
+          isPreparingResults ? (
+            <div className="flex-1 min-h-0 flex flex-col items-center justify-center max-w-xl mx-auto w-full p-6 animate-in fade-in duration-200">
+              <div className="w-full bg-slate-900 border border-sky-500/30 rounded-2xl p-8 text-center shadow-2xl">
+                <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
+                  <div className="absolute inset-0 rounded-full border-4 border-sky-500/20 border-t-sky-400 animate-spin" />
+                  <div
+                    className="absolute inset-2 rounded-full border-4 border-indigo-500/20 border-b-indigo-400 animate-spin"
+                    style={{ animationDirection: 'reverse', animationDuration: '1.2s' }}
+                  />
+                  <Database className="w-8 h-8 text-sky-400 animate-pulse" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-100 mb-2">
+                  {language === 'en' ? 'Structuring & Indexing Catalog...' : 'Estruturando & Indexando Catálogo...'}
+                </h2>
+                <p className="text-xs text-slate-400 mb-6 max-w-md mx-auto leading-relaxed">
+                  {language === 'en'
+                    ? `Building high-performance view and cataloging ${preparingCount.toLocaleString()} recovered items...`
+                    : `Montando tabela de exibição e catalogando ${preparingCount.toLocaleString()} arquivos recuperados...`}
+                </p>
+                <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden shadow-inner mb-3">
+                  <div className="bg-gradient-to-r from-sky-400 via-indigo-500 to-sky-400 h-full w-full animate-pulse" />
+                </div>
+                <div className="text-[11px] text-sky-400 font-mono animate-pulse">
+                  {language === 'en' ? 'Preparing table rows & previews...' : 'Preparando linhas da tabela e prévias...'}
+                </div>
+              </div>
+            </div>
+          ) : (
           <div className={`flex-1 min-h-0 flex flex-col h-full overflow-hidden transition-all duration-150 ${previewFile ? 'mr-[490px]' : ''}`}>
             <div className="shrink-0 flex items-center justify-between gap-4 mb-3 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
@@ -1559,6 +1589,7 @@ export default function App() {
               </div>
             </div>
           </div>
+          )
         )}
 
         {/* STEP 6: Recover Destination */}
@@ -1789,7 +1820,7 @@ export default function App() {
       )}
 
       {/* Slide-out Preview Drawer */}
-      {previewFile && (
+      {previewFile && !isPreparingResults && (
         <div
           className="fixed right-0 w-[480px] bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col z-40 top-14 transition-all duration-150 animate-in slide-in-from-right"
           style={{ bottom: showTerminal ? `${terminalHeight + 42}px` : 0 }}
