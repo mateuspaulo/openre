@@ -33,6 +33,12 @@ import {
   Terminal,
   Copy,
   Trash2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Volume2,
+  FileCode,
 } from 'lucide-react';
 
 interface DeviceInfo {
@@ -69,6 +75,7 @@ interface HexLine {
 
 interface PreviewData {
   preview_type: string;
+  media_data_url?: string;
   thumbnail_base64?: string;
   dimensions?: [number, number];
   hex_dump: HexLine[];
@@ -123,6 +130,13 @@ export default function App() {
   const [discoveredFiles, setDiscoveredFiles] = useState<RecoveredFile[]>([]);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
 
+  // Pagination state
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [currentPage, setCurrentPage] = useState<number>(1);
+
+  // Preview Drawer tab ('media' | 'hex')
+  const [previewTab, setPreviewTab] = useState<'media' | 'hex'>('media');
+
   // Terminal & Diagnostics state
   const [showTerminal, setShowTerminal] = useState<boolean>(true);
   const [terminalLogs, setTerminalLogs] = useState<LogEntry[]>([
@@ -130,7 +144,7 @@ export default function App() {
       id: 'init-1',
       timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
       level: 'info',
-      message: 'OpenRe v0.1.1 engine initialized in strict offline-first mode. Zero telemetry active.',
+      message: 'OpenRe v0.1.2 engine initialized in strict offline-first mode. Zero telemetry active.',
     },
     {
       id: 'init-2',
@@ -327,6 +341,7 @@ export default function App() {
   const openPreview = async (file: RecoveredFile) => {
     setPreviewFile(file);
     setRepairReport(null);
+    setPreviewTab('media');
     const data = await sendIpc('get_file_preview', {
       source_id: selectedSource?.id,
       source_offset: file.source_offset,
@@ -355,6 +370,42 @@ export default function App() {
       f.extension.toLowerCase().includes(searchQuery.toLowerCase());
     return matchCat && matchSearch;
   });
+
+  // Reset to page 1 when query, category, or page size changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterCategory, pageSize]);
+
+  // Pagination computations
+  const totalItems = filteredFiles.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
+  const startIndex = (safeCurrentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalItems);
+  const paginatedFiles = filteredFiles.slice(startIndex, endIndex);
+
+  const isPageFullySelected =
+    paginatedFiles.length > 0 && paginatedFiles.every((f) => selectedFileIds.has(f.id));
+  const isAllFullySelected =
+    filteredFiles.length > 0 && filteredFiles.every((f) => selectedFileIds.has(f.id));
+
+  const toggleSelectPage = () => {
+    const next = new Set(selectedFileIds);
+    if (isPageFullySelected) {
+      paginatedFiles.forEach((f) => next.delete(f.id));
+    } else {
+      paginatedFiles.forEach((f) => next.add(f.id));
+    }
+    setSelectedFileIds(next);
+  };
+
+  const toggleSelectAllFiltered = () => {
+    if (isAllFullySelected) {
+      setSelectedFileIds(new Set());
+    } else {
+      setSelectedFileIds(new Set(filteredFiles.map((f) => f.id)));
+    }
+  };
 
   const getCategoryIcon = (cat: string) => {
     switch (cat) {
@@ -388,7 +439,7 @@ export default function App() {
           <div>
             <div className="font-semibold text-base tracking-wide flex items-center gap-2">
               OpenRe
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.1</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.2</span>
             </div>
             <div className="text-[11px] text-slate-400">Professional File Recovery</div>
           </div>
@@ -936,14 +987,14 @@ export default function App() {
         {/* STEP 5: Review Results */}
         {currentStep === 5 && (
           <div className="flex-1 min-h-0 flex flex-col h-full overflow-hidden">
-            <div className="shrink-0 flex items-center justify-between gap-4 mb-4 pb-3 border-b border-slate-800">
+            <div className="shrink-0 flex items-center justify-between gap-4 mb-3 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="Filter by name or extension..."
+                  placeholder={language === 'en' ? "Filter by name or extension..." : "Filtrar por nome ou extensão..."}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 w-64"
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 w-60"
                 />
 
                 <select
@@ -951,19 +1002,38 @@ export default function App() {
                   onChange={(e) => setFilterCategory(e.target.value)}
                   className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
                 >
-                  <option value="All">All Categories</option>
-                  <option value="Image">Images</option>
-                  <option value="Document">Documents</option>
-                  <option value="Video">Videos</option>
-                  <option value="Audio">Audio</option>
-                  <option value="Archive">Archives</option>
-                  <option value="Text">Text</option>
+                  <option value="All">{language === 'en' ? 'All Categories' : 'Todas Categorias'}</option>
+                  <option value="Image">{language === 'en' ? 'Images' : 'Imagens'}</option>
+                  <option value="Document">{language === 'en' ? 'Documents' : 'Documentos'}</option>
+                  <option value="Video">{language === 'en' ? 'Videos' : 'Vídeos'}</option>
+                  <option value="Audio">{language === 'en' ? 'Audio' : 'Áudio'}</option>
+                  <option value="Archive">{language === 'en' ? 'Archives' : 'Arquivos Compactados'}</option>
+                  <option value="Text">{language === 'en' ? 'Text' : 'Texto'}</option>
                 </select>
+
+                <div className="flex items-center gap-1.5 ml-2">
+                  <button
+                    onClick={toggleSelectPage}
+                    className="px-2 py-1 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-300 transition"
+                  >
+                    {isPageFullySelected
+                      ? (language === 'en' ? 'Deselect Page' : 'Desmarcar Página')
+                      : (language === 'en' ? 'Select Page' : 'Marcar Página')}
+                  </button>
+                  <button
+                    onClick={toggleSelectAllFiltered}
+                    className="px-2 py-1 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 text-[11px] text-slate-300 transition"
+                  >
+                    {isAllFullySelected
+                      ? (language === 'en' ? 'Deselect All' : 'Desmarcar Todos')
+                      : (language === 'en' ? 'Select All' : 'Marcar Todos')}
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center gap-3">
-                <div className="text-xs text-slate-400">
-                  {selectedFileIds.size} of {filteredFiles.length} selected
+                <div className="text-xs text-slate-400 font-mono">
+                  <strong className="text-sky-400">{selectedFileIds.size}</strong> of {filteredFiles.length} selected
                 </div>
 
                 <div className="flex items-center border border-slate-800 rounded-lg overflow-hidden">
@@ -986,38 +1056,45 @@ export default function App() {
                   disabled={selectedFileIds.size === 0}
                   className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
                 >
-                  Proceed to Recover ({selectedFileIds.size}) <ArrowRight className="w-3.5 h-3.5" />
+                  {language === 'en' ? 'Proceed to Recover' : 'Avançar para Recuperação'} ({selectedFileIds.size}) <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto pr-1">
-              {viewMode === 'list' ? (
+              {paginatedFiles.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-8 text-slate-500">
+                  <FileSearch className="w-12 h-12 text-slate-600 mb-3" />
+                  <p className="text-sm font-medium text-slate-300 mb-1">
+                    {language === 'en' ? 'No files match your filter' : 'Nenhum arquivo corresponde ao filtro'}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {language === 'en'
+                      ? 'Try clearing the search query or selecting "All Categories".'
+                      : 'Tente limpar a busca ou selecionar "Todas Categorias".'}
+                  </p>
+                </div>
+              ) : viewMode === 'list' ? (
                 <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0 bg-slate-900 text-slate-400 font-semibold border-b border-slate-800">
+                  <thead className="sticky top-0 bg-slate-900 text-slate-400 font-semibold border-b border-slate-800 z-10">
                     <tr>
                       <th className="py-2 px-3 w-8">
                         <input
                           type="checkbox"
-                          checked={selectedFileIds.size === filteredFiles.length && filteredFiles.length > 0}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedFileIds(new Set(filteredFiles.map((f) => f.id)));
-                            } else {
-                              setSelectedFileIds(new Set());
-                            }
-                          }}
+                          checked={isPageFullySelected}
+                          onChange={toggleSelectPage}
+                          title={language === 'en' ? "Select/deselect page" : "Selecionar/desmarcar página"}
                         />
                       </th>
-                      <th className="py-2 px-3">Filename</th>
-                      <th className="py-2 px-3">Category</th>
-                      <th className="py-2 px-3">Size</th>
-                      <th className="py-2 px-3">Integrity Rating</th>
-                      <th className="py-2 px-3 text-right">Actions</th>
+                      <th className="py-2 px-3">{language === 'en' ? 'Filename' : 'Nome do Arquivo'}</th>
+                      <th className="py-2 px-3">{language === 'en' ? 'Category' : 'Categoria'}</th>
+                      <th className="py-2 px-3">{language === 'en' ? 'Size' : 'Tamanho'}</th>
+                      <th className="py-2 px-3">{language === 'en' ? 'Integrity Rating' : 'Integridade'}</th>
+                      <th className="py-2 px-3 text-right">{language === 'en' ? 'Actions' : 'Ações'}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-850">
-                    {filteredFiles.map((file) => (
+                    {paginatedFiles.map((file) => (
                       <tr key={file.id} className="hover:bg-slate-900/60 transition group">
                         <td className="py-2 px-3">
                           <input
@@ -1045,7 +1122,7 @@ export default function App() {
                             onClick={() => openPreview(file)}
                             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition inline-flex items-center gap-1"
                           >
-                            <Eye className="w-3.5 h-3.5" /> Preview
+                            <Eye className="w-3.5 h-3.5" /> {language === 'en' ? 'Preview' : 'Visualizar'}
                           </button>
                         </td>
                       </tr>
@@ -1053,23 +1130,122 @@ export default function App() {
                   </tbody>
                 </table>
               ) : (
-                <div className="grid grid-cols-4 gap-3">
-                  {filteredFiles.map((file) => (
+                <div className="grid grid-cols-4 gap-3 p-1">
+                  {paginatedFiles.map((file) => (
                     <div
                       key={file.id}
                       onClick={() => openPreview(file)}
-                      className="p-3 rounded-lg border border-slate-800 bg-slate-900/40 hover:border-slate-700 cursor-pointer transition flex flex-col justify-between"
+                      className={`p-3 rounded-lg border transition flex flex-col justify-between cursor-pointer ${
+                        selectedFileIds.has(file.id)
+                          ? 'border-sky-500/60 bg-sky-500/10'
+                          : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
+                      }`}
                     >
                       <div className="flex items-center justify-between mb-2">
-                        {getCategoryIcon(file.category)}
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={selectedFileIds.has(file.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              const next = new Set(selectedFileIds);
+                              if (e.target.checked) next.add(file.id);
+                              else next.delete(file.id);
+                              setSelectedFileIds(next);
+                            }}
+                          />
+                          {getCategoryIcon(file.category)}
+                        </div>
                         {getIntegrityBadge(file.integrity)}
                       </div>
                       <div className="font-mono text-xs font-medium truncate text-slate-200 mb-1">{file.filename}</div>
-                      <div className="text-[11px] text-slate-500 font-mono">{(file.size_bytes / 1024).toFixed(1)} KB</div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono">
+                        <span>{(file.size_bytes / 1024).toFixed(1)} KB</span>
+                        <span className="text-sky-400 hover:underline">{language === 'en' ? 'Preview' : 'Ver'}</span>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
+            </div>
+
+            {/* Pagination Controls Bar */}
+            <div className="shrink-0 pt-3 mt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 select-none text-xs">
+              {/* Left: Showing range */}
+              <div className="text-slate-400 font-mono text-[11px]">
+                {totalItems > 0 ? (
+                  <span>
+                    {language === 'en' ? 'Showing' : 'Exibindo'}{' '}
+                    <strong className="text-slate-200">{startIndex + 1}</strong>–
+                    <strong className="text-slate-200">{endIndex}</strong> {language === 'en' ? 'of' : 'de'}{' '}
+                    <strong className="text-sky-400">{totalItems}</strong> {language === 'en' ? 'files' : 'arquivos'}
+                  </span>
+                ) : (
+                  <span>{language === 'en' ? 'No files found' : 'Nenhum arquivo encontrado'}</span>
+                )}
+              </div>
+
+              {/* Center: Page size buttons */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 text-[11px] mr-1">
+                  {language === 'en' ? 'Per page:' : 'Por página:'}
+                </span>
+                {[20, 50, 100, 200, 300].map((size) => (
+                  <button
+                    key={size}
+                    onClick={() => setPageSize(size)}
+                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition ${
+                      pageSize === size
+                        ? 'bg-sky-600 text-white font-bold shadow-sm'
+                        : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                    }`}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+
+              {/* Right: Navigation controls */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setCurrentPage(1)}
+                  disabled={safeCurrentPage <= 1}
+                  title={language === 'en' ? 'First page' : 'Primeira página'}
+                  className="p-1.5 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300"
+                >
+                  <ChevronsLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={safeCurrentPage <= 1}
+                  title={language === 'en' ? 'Previous page' : 'Página anterior'}
+                  className="p-1.5 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+
+                <span className="px-2 text-[11px] text-slate-300 font-mono">
+                  {language === 'en' ? 'Page' : 'Pág'}{' '}
+                  <strong className="text-sky-400">{safeCurrentPage}</strong> / {totalPages}
+                </span>
+
+                <button
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safeCurrentPage >= totalPages}
+                  title={language === 'en' ? 'Next page' : 'Próxima página'}
+                  className="p-1.5 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={safeCurrentPage >= totalPages}
+                  title={language === 'en' ? 'Last page' : 'Última página'}
+                  className="p-1.5 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300"
+                >
+                  <ChevronsRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1256,7 +1432,8 @@ export default function App() {
 
       {/* Slide-out Preview Drawer */}
       {previewFile && (
-        <div className="fixed inset-y-0 right-0 w-[480px] bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col z-50">
+        <div className="fixed inset-y-0 right-0 w-[540px] bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col z-50">
+          {/* Header */}
           <div className="p-4 border-b border-slate-800 flex items-center justify-between">
             <div className="font-semibold text-sm flex items-center gap-2 truncate">
               {getCategoryIcon(previewFile.category)}
@@ -1270,74 +1447,216 @@ export default function App() {
             </button>
           </div>
 
+          {/* Mode Switcher Tabs */}
+          <div className="px-4 pt-2.5 pb-2 border-b border-slate-800 flex items-center gap-2 bg-slate-950/40 select-none">
+            <button
+              onClick={() => setPreviewTab('media')}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 ${
+                previewTab === 'media'
+                  ? 'bg-sky-600 text-white shadow-sm'
+                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              {language === 'en' ? 'Visual / Media Preview' : 'Visualização Real'}
+            </button>
+            <button
+              onClick={() => setPreviewTab('hex')}
+              className={`px-3 py-1 rounded-md text-xs font-semibold transition flex items-center gap-1.5 ${
+                previewTab === 'hex'
+                  ? 'bg-sky-600 text-white shadow-sm'
+                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <FileCode className="w-3.5 h-3.5" />
+              {language === 'en' ? 'Bytecode Hex Dump' : 'Inspeção Hexadecimal'}
+            </button>
+          </div>
+
+          {/* Drawer Body */}
           <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
-            {previewData?.thumbnail_base64 && (
-              <div className="border border-slate-800 rounded-xl p-3 bg-slate-950 flex flex-col items-center">
-                <img
-                  src={previewData.thumbnail_base64}
-                  alt="Recovered Thumbnail"
-                  className="max-h-48 object-contain rounded-lg"
-                />
-                {previewData.dimensions && (
-                  <div className="text-[11px] text-slate-400 mt-2">
-                    {previewData.dimensions[0]} × {previewData.dimensions[1]} pixels
+            {previewTab === 'media' ? (
+              <>
+                {/* Image Media Preview */}
+                {(previewFile.category === 'Image' ||
+                  ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(previewFile.extension.toLowerCase())) && (
+                  <div className="border border-slate-800 rounded-xl p-3 bg-slate-950 flex flex-col items-center">
+                    {previewData?.media_data_url || previewData?.thumbnail_base64 ? (
+                      <div className="w-full flex flex-col items-center">
+                        <img
+                          src={previewData.media_data_url || previewData.thumbnail_base64}
+                          alt={previewFile.filename}
+                          className="max-h-64 max-w-full object-contain rounded-lg shadow-lg border border-slate-850"
+                        />
+                        {previewData.dimensions && (
+                          <div className="text-[11px] text-slate-400 mt-2.5 font-mono flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-800">
+                              {previewData.dimensions[0]} × {previewData.dimensions[1]} px
+                            </span>
+                            <span className="text-slate-500">•</span>
+                            <span className="text-emerald-400 font-semibold">{previewFile.extension.toUpperCase()}</span>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="py-8 text-center text-slate-500">
+                        <ImageIcon className="w-10 h-10 mx-auto mb-2 text-slate-600" />
+                        <p className="text-xs">
+                          {language === 'en' ? 'No preview image available.' : 'Nenhuma imagem disponível.'}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
 
-            {(previewFile.extension === 'jpg' || previewFile.extension === 'png') && (
-              <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 flex items-center justify-between">
-                <div>
-                  <div className="font-semibold text-xs text-indigo-300">Non-Destructive Image Repair</div>
-                  <div className="text-[11px] text-slate-400">Reconstruct missing markers and recalculate chunk CRCs.</div>
-                </div>
-                <button
-                  onClick={handleRepairCopy}
-                  className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1"
-                >
-                  <Wrench className="w-3.5 h-3.5" /> Repair Copy
-                </button>
-              </div>
-            )}
-
-            {repairReport && (
-              <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-300">
-                <div className="font-semibold mb-1">Repair Applied:</div>
-                {repairReport.fixes_applied.map((f, i) => (
-                  <div key={i}>• {f}</div>
-                ))}
-              </div>
-            )}
-
-            <div className="border border-slate-800 rounded-lg p-3 bg-slate-950/50">
-              <div className="text-xs font-semibold text-slate-400 mb-2">Metadata & Allocation:</div>
-              <div className="space-y-1 text-xs">
-                <div className="flex justify-between text-slate-400">
-                  <span>File Size:</span>
-                  <span className="font-mono text-slate-200">{previewFile.size_bytes} bytes</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Source Offset:</span>
-                  <span className="font-mono text-slate-200">0x{previewFile.source_offset.toString(16).toUpperCase()}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Integrity:</span>
-                  <span>{getIntegrityBadge(previewFile.integrity)}</span>
-                </div>
-              </div>
-            </div>
-
-            {previewData?.hex_dump && previewData.hex_dump.length > 0 && (
-              <div className="border border-slate-800 rounded-lg p-3 bg-slate-950 font-mono text-[11px] overflow-x-auto">
-                <div className="text-slate-400 font-semibold mb-2">Raw Sector Dump (First 512 bytes):</div>
-                {previewData.hex_dump.map((line, idx) => (
-                  <div key={idx} className="flex gap-2 text-slate-300">
-                    <span className="text-slate-500">{line.offset}</span>
-                    <span className="text-sky-300">{line.hex}</span>
-                    <span className="text-slate-400">|{line.ascii}|</span>
+                {/* Audio Media Preview */}
+                {(previewFile.category === 'Audio' ||
+                  ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma'].includes(previewFile.extension.toLowerCase())) && (
+                  <div className="border border-slate-800 rounded-xl p-4 bg-slate-950 flex flex-col items-center">
+                    <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mb-3 shadow-inner">
+                      <Volume2 className="w-8 h-8" />
+                    </div>
+                    <div className="text-xs font-semibold text-slate-200 mb-1">{previewFile.filename}</div>
+                    <div className="text-[11px] text-slate-400 mb-3 font-mono">
+                      {previewFile.extension.toUpperCase()} Audio • {(previewFile.size_bytes / (1024 * 1024)).toFixed(2)} MB
+                    </div>
+                    {previewData?.media_data_url ? (
+                      <div className="w-full">
+                        <audio controls className="w-full rounded-lg" src={previewData.media_data_url} preload="auto" />
+                        <p className="text-[10px] text-slate-500 text-center mt-2">
+                          {language === 'en'
+                            ? 'Audio stream loaded directly from carved raw sectors.'
+                            : 'Fluxo de áudio carregado diretamente dos setores gravados.'}
+                        </p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-amber-400/80 italic">
+                        {language === 'en' ? 'Audio stream buffer unavailable.' : 'Buffer de áudio indisponível.'}
+                      </p>
+                    )}
                   </div>
-                ))}
+                )}
+
+                {/* Video Media Preview */}
+                {(previewFile.category === 'Video' ||
+                  ['mp4', 'webm', 'mkv', 'avi', 'mov'].includes(previewFile.extension.toLowerCase())) && (
+                  <div className="border border-slate-800 rounded-xl p-3 bg-slate-950 flex flex-col items-center">
+                    {previewData?.media_data_url ? (
+                      <div className="w-full flex flex-col items-center">
+                        <video
+                          controls
+                          className="w-full max-h-64 rounded-lg bg-black border border-slate-800 object-contain shadow-lg"
+                          src={previewData.media_data_url}
+                          preload="metadata"
+                        />
+                        <div className="w-full flex justify-between items-center text-[10px] text-slate-400 mt-2 font-mono px-1">
+                          <span className="text-purple-400 font-semibold">{previewFile.extension.toUpperCase()} Video</span>
+                          <span>{(previewFile.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="py-8 text-center text-slate-500">
+                        <Video className="w-10 h-10 mx-auto mb-2 text-slate-600" />
+                        <p className="text-xs">
+                          {language === 'en' ? 'Video preview could not be streamed.' : 'Prévia de vídeo não pôde ser reproduzida.'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Text Snippet Preview */}
+                {previewData?.text_snippet && (
+                  <div className="border border-slate-800 rounded-lg p-3 bg-slate-950">
+                    <div className="text-xs font-semibold text-slate-400 mb-2 flex items-center gap-1.5">
+                      <FileCode className="w-3.5 h-3.5 text-sky-400" />
+                      {language === 'en' ? 'Decoded Text Content:' : 'Conteúdo de Texto Decodificado:'}
+                    </div>
+                    <pre className="text-[11px] font-mono text-slate-200 whitespace-pre-wrap max-h-56 overflow-y-auto p-2.5 bg-slate-900 rounded border border-slate-850">
+                      {previewData.text_snippet}
+                    </pre>
+                  </div>
+                )}
+
+                {/* Image Repair Option */}
+                {(previewFile.extension === 'jpg' || previewFile.extension === 'png') && (
+                  <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold text-xs text-indigo-300">Non-Destructive Image Repair</div>
+                      <div className="text-[11px] text-slate-400">Reconstruct missing markers and recalculate chunk CRCs.</div>
+                    </div>
+                    <button
+                      onClick={handleRepairCopy}
+                      className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1"
+                    >
+                      <Wrench className="w-3.5 h-3.5" /> Repair Copy
+                    </button>
+                  </div>
+                )}
+
+                {repairReport && (
+                  <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-300">
+                    <div className="font-semibold mb-1">Repair Applied:</div>
+                    {repairReport.fixes_applied.map((f, i) => (
+                      <div key={i}>• {f}</div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Metadata & Allocation */}
+                <div className="border border-slate-800 rounded-lg p-3 bg-slate-950/50">
+                  <div className="text-xs font-semibold text-slate-400 mb-2">Metadata & Allocation:</div>
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between text-slate-400">
+                      <span>File Size:</span>
+                      <span className="font-mono text-slate-200">{previewFile.size_bytes.toLocaleString()} bytes ({(previewFile.size_bytes / 1024).toFixed(1)} KB)</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Source Offset:</span>
+                      <span className="font-mono text-slate-200">0x{previewFile.source_offset.toString(16).toUpperCase()}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Category:</span>
+                      <span className="text-slate-200">{previewFile.category}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-400">
+                      <span>Integrity:</span>
+                      <span>{getIntegrityBadge(previewFile.integrity)}</span>
+                    </div>
+                    {previewData?.metadata_entries && previewData.metadata_entries.map(([k, v], idx) => (
+                      <div key={idx} className="flex justify-between text-slate-400 pt-1 border-t border-slate-900">
+                        <span>{k}:</span>
+                        <span className="font-mono text-slate-300 text-right truncate max-w-[240px]">{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* Hex Dump Inspection Tab */
+              <div className="space-y-3">
+                <div className="p-2.5 rounded-lg border border-sky-500/20 bg-sky-500/10 text-[11px] text-sky-300">
+                  {language === 'en'
+                    ? 'Showing raw binary sector bytes (first 512 bytes) read directly from disk offsets.'
+                    : 'Exibindo bytes binários brutos do setor (primeiros 512 bytes) lidos diretamente do disco.'}
+                </div>
+
+                {previewData?.hex_dump && previewData.hex_dump.length > 0 ? (
+                  <div className="border border-slate-800 rounded-lg p-3 bg-slate-950 font-mono text-[11px] overflow-x-auto">
+                    <div className="text-slate-400 font-semibold mb-2">Sector Hex Dump:</div>
+                    {previewData.hex_dump.map((line, idx) => (
+                      <div key={idx} className="flex gap-2 text-slate-300">
+                        <span className="text-slate-500">{line.offset}</span>
+                        <span className="text-sky-300">{line.hex}</span>
+                        <span className="text-slate-400">|{line.ascii}|</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-slate-500 text-center py-8">
+                    {language === 'en' ? 'No hex data available for this sector.' : 'Nenhum dado hexadecimal para este setor.'}
+                  </div>
+                )}
               </div>
             )}
           </div>

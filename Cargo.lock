@@ -705,7 +705,7 @@ dependencies = [
 
 [[package]]
 name = "device-access"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "recovery-core",
  "walkdir",
@@ -911,7 +911,7 @@ dependencies = [
 
 [[package]]
 name = "file-carving"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -920,7 +920,7 @@ dependencies = [
 
 [[package]]
 name = "file-preview"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "image",
@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "filesystem"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "byteorder",
  "recovery-core",
@@ -1599,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "image-repair"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -2247,7 +2247,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openre-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "device-access",
@@ -2262,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "openre-gui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64",
  "chrono",
@@ -2797,7 +2797,7 @@ dependencies = [
 
 [[package]]
 name = "recovery-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "serde",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "reporting"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "recovery-core",
@@ -2887,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "scanner"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "device-access",
  "file-carving",

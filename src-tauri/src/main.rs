@@ -304,7 +304,8 @@ fn handle_ipc_message(
             emit_log("info", &format!("Generating pre-recovery preview (ext: {}, offset: 0x{:X}, size: {} bytes)...", ext, offset, size), proxy);
 
             let preview = if let Ok(mut reader) = open_block_reader(source_id) {
-                let mut buf = vec![0u8; size.min(1024 * 1024) as usize];
+                let read_limit = (size as usize).min(12 * 1024 * 1024).max(512);
+                let mut buf = vec![0u8; read_limit];
                 let _ = reader.read_at(offset, &mut buf);
                 generate_preview(&buf, ext)
             } else {

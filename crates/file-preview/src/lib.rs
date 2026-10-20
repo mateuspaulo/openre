@@ -16,6 +16,7 @@ pub struct HexLine {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreviewData {
     pub preview_type: String,
+    pub media_data_url: Option<String>,
     pub thumbnail_base64: Option<String>,
     pub dimensions: Option<(u32, u32)>,
     pub hex_dump: Vec<HexLine>,
@@ -29,16 +30,100 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
 
     match category {
         FileCategory::Image => {
+            let mime = match extension.to_lowercase().as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                "png" => "image/png",
+                "gif" => "image/gif",
+                "webp" => "image/webp",
+                "bmp" => "image/bmp",
+                "svg" => "image/svg+xml",
+                _ => "image/png",
+            };
+
+            let preview_slice = &data[..data.len().min(12 * 1024 * 1024)];
+            let media_url = Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)));
+
             if let Some(mut img_prev) = generate_image_preview(data) {
+                img_prev.media_data_url = media_url;
                 img_prev.hex_dump = hex_lines;
                 return img_prev;
             }
+
+            return PreviewData {
+                preview_type: "image".to_string(),
+                media_data_url: media_url,
+                thumbnail_base64: None,
+                dimensions: None,
+                hex_dump: hex_lines,
+                text_snippet: None,
+                metadata_entries: vec![
+                    ("Format".to_string(), extension.to_uppercase()),
+                    ("Size".to_string(), format!("{} bytes", data.len())),
+                ],
+            };
+        }
+        FileCategory::Audio => {
+            let mime = match extension.to_lowercase().as_str() {
+                "mp3" => "audio/mpeg",
+                "wav" => "audio/wav",
+                "ogg" => "audio/ogg",
+                "m4a" | "aac" => "audio/mp4",
+                "flac" => "audio/flac",
+                _ => "audio/mpeg",
+            };
+
+            let preview_slice = &data[..data.len().min(12 * 1024 * 1024)];
+            let media_url = Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)));
+
+            return PreviewData {
+                preview_type: "audio".to_string(),
+                media_data_url: media_url,
+                thumbnail_base64: None,
+                dimensions: None,
+                hex_dump: hex_lines,
+                text_snippet: None,
+                metadata_entries: vec![
+                    ("Type".to_string(), "Digital Audio Stream".to_string()),
+                    ("Container".to_string(), extension.to_uppercase()),
+                    ("MIME Type".to_string(), mime.to_string()),
+                    ("Sample Size".to_string(), format!("{} bytes", data.len())),
+                ],
+            };
+        }
+        FileCategory::Video => {
+            let mime = match extension.to_lowercase().as_str() {
+                "mp4" | "m4v" => "video/mp4",
+                "webm" => "video/webm",
+                "mov" => "video/mp4",
+                "mkv" => "video/mp4",
+                "avi" => "video/x-msvideo",
+                _ => "video/mp4",
+            };
+
+            let preview_slice = &data[..data.len().min(16 * 1024 * 1024)];
+            let media_url = Some(format!("data:{};base64,{}", mime, BASE64.encode(preview_slice)));
+
+            return PreviewData {
+                preview_type: "video".to_string(),
+                media_data_url: media_url,
+                thumbnail_base64: None,
+                dimensions: None,
+                hex_dump: hex_lines,
+                text_snippet: None,
+                metadata_entries: vec![
+                    ("Type".to_string(), "Digital Video Container".to_string()),
+                    ("Container".to_string(), extension.to_uppercase()),
+                    ("MIME Type".to_string(), mime.to_string()),
+                    ("Stream Size".to_string(), format!("{} bytes", data.len())),
+                ],
+            };
         }
         FileCategory::Text => {
-            let max_text = data.len().min(4096);
+            let max_text = data.len().min(32768);
             let snippet = String::from_utf8_lossy(&data[..max_text]).to_string();
             return PreviewData {
                 preview_type: "text".to_string(),
+                media_data_url: None,
                 thumbnail_base64: None,
                 dimensions: None,
                 hex_dump: hex_lines,
@@ -55,9 +140,15 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
                 entries.push(("Type".to_string(), "Adobe Portable Document Format".to_string()));
             } else if extension.eq_ignore_ascii_case("docx") {
                 entries.push(("Type".to_string(), "Microsoft Word Document (OpenXML)".to_string()));
+            } else if extension.eq_ignore_ascii_case("xlsx") {
+                entries.push(("Type".to_string(), "Microsoft Excel Spreadsheet (OpenXML)".to_string()));
+            } else if extension.eq_ignore_ascii_case("zip") {
+                entries.push(("Type".to_string(), "Compressed Archive (ZIP)".to_string()));
             }
+
             return PreviewData {
                 preview_type: "document".to_string(),
+                media_data_url: None,
                 thumbnail_base64: None,
                 dimensions: None,
                 hex_dump: hex_lines,
@@ -65,24 +156,12 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
                 metadata_entries: entries,
             };
         }
-        FileCategory::Audio | FileCategory::Video => {
-            return PreviewData {
-                preview_type: "media".to_string(),
-                thumbnail_base64: None,
-                dimensions: None,
-                hex_dump: hex_lines,
-                text_snippet: None,
-                metadata_entries: vec![
-                    ("Container".to_string(), extension.to_uppercase()),
-                    ("Total Bytes".to_string(), data.len().to_string()),
-                ],
-            };
-        }
         _ => {}
     }
 
     PreviewData {
         preview_type: "hex".to_string(),
+        media_data_url: None,
         thumbnail_base64: None,
         dimensions: None,
         hex_dump: hex_lines,
@@ -113,6 +192,7 @@ pub fn generate_image_preview(data: &[u8]) -> Option<PreviewData> {
 
     Some(PreviewData {
         preview_type: "image".to_string(),
+        media_data_url: None,
         thumbnail_base64: Some(b64),
         dimensions: Some((w, h)),
         hex_dump: Vec::new(),

@@ -5,6 +5,19 @@ All notable changes to **OpenRe** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-10-20
+
+### Added
+- **Results Pagination Engine (Step 5):** Configurable pagination with page sizes of `20`, `50`, `100`, `200`, and `300` items per page. Greatly optimizes DOM rendering performance and memory usage, eliminating UI freezes when reviewing thousands of carved files.
+- **Dual-Level Selection Toolbar:** Quick-selection controls enabling users to select or deselect either the current page or all filtered items at once.
+- **Real Multimedia Players in Preview Drawer:**
+  - **Audio Player:** Native HTML5 audio player (`<audio controls>`) capable of playing recovered MP3, WAV, OGG, FLAC, and M4A streams directly from carved sectors.
+  - **Video Player:** Native HTML5 video player (`<video controls>`) for playback of recovered MP4, WebM, and other video streams.
+  - **Image Viewer:** Full-resolution image display with dimensions indicator and format badge.
+  - **Decoded Text Reader:** Monospace viewer for textual files and snippets.
+- **Preview Drawer Mode Switcher:** Tabbed interface distinguishing between "Visual / Media Preview" (default) and "Bytecode Hex Dump" for low-level forensic sector examination.
+- **Expanded Preview Buffer:** Scaled backend preview buffer up to 12 MB in `get_file_preview` to feed complete media headers and streams to the frontend without sector cutoff.
+
 ## [0.1.1] - 2026-10-20
 
 ### Added

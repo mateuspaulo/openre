@@ -3,7 +3,7 @@
 **Project Name:** OpenRe  
 **Target:** Open-Source, Cross-Platform File Recovery Desktop Application  
 **Repository:** `openre`  
-**Current Phase:** Release v0.1.1  
+**Current Phase:** Release v0.1.2  
 **Last Updated:** October 20, 2026  
 
 ---
