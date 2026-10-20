@@ -708,6 +708,7 @@ name = "device-access"
 version = "0.1.0"
 dependencies = [
  "recovery-core",
+ "walkdir",
 ]
 
 [[package]]
@@ -2264,6 +2265,7 @@ name = "openre-gui"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "device-access",
  "file-carving",
  "file-preview",

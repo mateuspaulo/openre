@@ -1,12 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use device_access::{enumerate_devices, BlockReader, FileBlockReader};
+use device_access::{enumerate_devices, open_block_reader};
 use file_preview::generate_preview;
 use image_repair::repair_image;
-use recovery_core::{CancellationToken, RecoveredFile};
+use recovery_core::{CancellationToken, RecoveredFile, RecoveryError};
 use scanner::Scanner;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tao::dpi::LogicalSize;
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let window = WindowBuilder::new()
         .with_title("OpenRe — Professional File Recovery")
-        .with_inner_size(LogicalSize::new(1240.0, 820.0))
+        .with_inner_size(LogicalSize::new(1240.0, 840.0))
         .with_min_inner_size(LogicalSize::new(960.0, 640.0))
         .build(&event_loop)?;
 
@@ -97,25 +97,34 @@ fn handle_ipc_message(
         "list_devices" => {
             let devs = enumerate_devices();
             let json = serde_json::to_string(&devs).unwrap_or_else(|_| "[]".to_string());
+            emit_log("info", &format!("Enumerated {} available storage devices and volumes", devs.len()), proxy);
             emit_response(msg_id, &json, proxy);
         }
         "select_folder" => {
             let folder = rfd::FileDialog::new().pick_folder();
             let path_str = folder.map(|p| p.to_string_lossy().to_string());
+            if let Some(ref p) = path_str {
+                emit_log("info", &format!("Custom storage directory selected: {}", p), proxy);
+            }
             let json = serde_json::to_string(&path_str).unwrap_or_else(|_| "null".to_string());
             emit_response(msg_id, &json, proxy);
         }
         "select_image_file" => {
             let file = rfd::FileDialog::new()
-                .add_filter("Raw Disk Images", &["img", "dd", "raw", "bin"])
+                .add_filter("Raw Disk Images", &["img", "dd", "raw", "bin", "iso"])
                 .pick_file();
             let path_str = file.map(|p| p.to_string_lossy().to_string());
+            if let Some(ref p) = path_str {
+                emit_log("info", &format!("Raw disk image selected: {}", p), proxy);
+            }
             let json = serde_json::to_string(&path_str).unwrap_or_else(|_| "null".to_string());
             emit_response(msg_id, &json, proxy);
         }
         "start_scan" => {
             let source_id = msg.payload.get("source_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
             let mode = msg.payload.get("mode").and_then(|v| v.as_str()).unwrap_or("quick").to_string();
+
+            emit_log("info", &format!("Initializing {} scan on target '{}'...", mode.to_uppercase(), source_id), proxy);
 
             let cancel = CancellationToken::new();
             if let Ok(mut st) = state.lock() {
@@ -126,26 +135,145 @@ fn handle_ipc_message(
             let state_clone = Arc::clone(state);
 
             thread::spawn(move || {
-                let path = PathBuf::from(&source_id);
-                if let Ok(mut reader) = FileBlockReader::open(&path) {
-                    let proxy_progress = proxy_clone.clone();
-                    let files_res = if mode == "quick" {
-                        Scanner::quick_scan(&mut reader, &cancel, move |p| {
-                            emit_event("scan_progress", &serde_json::to_string(&p).unwrap(), &proxy_progress);
-                        })
-                    } else {
-                        Scanner::deep_scan(&mut reader, &cancel, move |p| {
-                            emit_event("scan_progress", &serde_json::to_string(&p).unwrap(), &proxy_progress);
-                        })
-                    };
+                let mut reader = match open_block_reader(&source_id) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let err_msg = format!("Failed to open target '{}': {}", source_id, e);
+                        emit_log("error", &err_msg, &proxy_clone);
+                        if let RecoveryError::PermissionDenied(_) = e {
+                            emit_log(
+                                "warn",
+                                "Administrator privileges required to access raw disk sectors. Right-click OpenRe.exe and choose 'Run as Administrator', or choose a specific directory to scan without elevation.",
+                                &proxy_clone,
+                            );
+                        }
+                        emit_event(
+                            "scan_error",
+                            &serde_json::json!({ "error": err_msg }).to_string(),
+                            &proxy_clone,
+                        );
+                        return;
+                    }
+                };
 
-                    if let Ok(files) = files_res {
+                let total_bytes = reader.total_bytes();
+                emit_log(
+                    "info",
+                    &format!(
+                        "Target device opened successfully. Media capacity: {:.2} MB ({} bytes)",
+                        total_bytes as f64 / (1024.0 * 1024.0),
+                        total_bytes
+                    ),
+                    &proxy_clone,
+                );
+
+                let proxy_progress = proxy_clone.clone();
+                let proxy_log = proxy_clone.clone();
+                let last_progress_emit = Arc::new(Mutex::new(std::time::Instant::now()));
+                let last_log_time = Arc::new(Mutex::new(std::time::Instant::now()));
+                let last_files_count = Arc::new(Mutex::new(0usize));
+
+                let files_res = if mode == "quick" {
+                    emit_log("info", "Quick scan started: inspecting filesystem structures and directory entries...", &proxy_clone);
+                    let emit_tracker = Arc::clone(&last_progress_emit);
+                    Scanner::quick_scan(&mut *reader, &cancel, move |p| {
+                        let should_emit = p.is_complete || {
+                            if let Ok(mut last_t) = emit_tracker.lock() {
+                                if last_t.elapsed().as_millis() >= 100 {
+                                    *last_t = std::time::Instant::now();
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        };
+                        if should_emit {
+                            emit_event("scan_progress", &serde_json::to_string(&p).unwrap(), &proxy_progress);
+                        }
+                    })
+                } else {
+                    emit_log("info", "Deep scan started: scanning contiguous block windows and analyzing file signatures...", &proxy_clone);
+                    let emit_tracker = Arc::clone(&last_progress_emit);
+                    Scanner::deep_scan(&mut *reader, &cancel, move |p| {
+                        let should_emit = p.is_complete || {
+                            if let Ok(mut last_t) = emit_tracker.lock() {
+                                if last_t.elapsed().as_millis() >= 100 {
+                                    *last_t = std::time::Instant::now();
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        };
+                        if should_emit {
+                            emit_event("scan_progress", &serde_json::to_string(&p).unwrap(), &proxy_progress);
+                        }
+
+                        if let Ok(mut last_t) = last_log_time.lock() {
+                            if last_t.elapsed().as_secs() >= 3 {
+                                *last_t = std::time::Instant::now();
+                                let pct = if p.total_bytes > 0 { (p.bytes_scanned as f64 / p.total_bytes as f64) * 100.0 } else { 0.0 };
+                                emit_log(
+                                    "info",
+                                    &format!(
+                                        "Deep Scan progress: {:.1}% complete ({:.1} MB/s) | {} files discovered",
+                                        pct,
+                                        p.speed_bytes_per_sec as f64 / (1024.0 * 1024.0),
+                                        p.files_found
+                                    ),
+                                    &proxy_log,
+                                );
+                            }
+                        }
+
+                        if let Ok(mut last_c) = last_files_count.lock() {
+                            if p.files_found > *last_c {
+                                emit_log(
+                                    "success",
+                                    &format!("Discovered valid signature! Total recoverable files: {}", p.files_found),
+                                    &proxy_log,
+                                );
+                                *last_c = p.files_found;
+                            }
+                        }
+                    })
+                };
+
+                match files_res {
+                    Ok(files) => {
+                        let count = files.len();
                         if let Ok(mut st) = state_clone.lock() {
                             st.last_discovered = files.clone();
                         }
+                        emit_log(
+                            "success",
+                            &format!("Scan completed successfully! {} recoverable files identified.", count),
+                            &proxy_clone,
+                        );
                         emit_event(
                             "scan_completed",
                             &serde_json::json!({ "files": files }).to_string(),
+                            &proxy_clone,
+                        );
+                    }
+                    Err(RecoveryError::Cancelled) => {
+                        emit_log("warn", "Scan operation cancelled by user.", &proxy_clone);
+                        emit_event(
+                            "scan_error",
+                            &serde_json::json!({ "error": "Scan operation cancelled by user." }).to_string(),
+                            &proxy_clone,
+                        );
+                    }
+                    Err(e) => {
+                        let err_msg = format!("Scan halted with error: {}", e);
+                        emit_log("error", &err_msg, &proxy_clone);
+                        emit_event(
+                            "scan_error",
+                            &serde_json::json!({ "error": err_msg }).to_string(),
                             &proxy_clone,
                         );
                     }
@@ -153,6 +281,7 @@ fn handle_ipc_message(
             });
         }
         "cancel_scan" => {
+            emit_log("warn", "Cancellation requested by user...", proxy);
             if let Ok(st) = state.lock() {
                 st.cancel_token.cancel();
             }
@@ -163,7 +292,9 @@ fn handle_ipc_message(
             let size = msg.payload.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
             let ext = msg.payload.get("extension").and_then(|v| v.as_str()).unwrap_or_default();
 
-            let preview = if let Ok(mut reader) = FileBlockReader::open(Path::new(source_id)) {
+            emit_log("info", &format!("Generating pre-recovery preview (ext: {}, offset: 0x{:X}, size: {} bytes)...", ext, offset, size), proxy);
+
+            let preview = if let Ok(mut reader) = open_block_reader(source_id) {
                 let mut buf = vec![0u8; size.min(1024 * 1024) as usize];
                 let _ = reader.read_at(offset, &mut buf);
                 generate_preview(&buf, ext)
@@ -180,11 +311,13 @@ fn handle_ipc_message(
             let size = msg.payload.get("size_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
             let fname = msg.payload.get("filename").and_then(|v| v.as_str()).unwrap_or_default();
 
+            emit_log("info", &format!("Running non-destructive image validation & repair on '{}'...", fname), proxy);
+
             let mut success = false;
             let mut fixes = Vec::new();
             let mut issues = Vec::new();
 
-            if let Ok(mut reader) = FileBlockReader::open(Path::new(source_id)) {
+            if let Ok(mut reader) = open_block_reader(source_id) {
                 let mut buf = vec![0u8; size.min(10 * 1024 * 1024) as usize];
                 if reader.read_at(offset, &mut buf).is_ok() {
                     if let Ok(report) = repair_image(&buf, fname) {
@@ -193,6 +326,12 @@ fn handle_ipc_message(
                         issues = report.issues_found;
                     }
                 }
+            }
+
+            if success {
+                emit_log("success", &format!("Repair analysis completed for '{}': {} fixes applied", fname, fixes.len()), proxy);
+            } else {
+                emit_log("warn", &format!("Repair analysis completed for '{}': {} issues found", fname, issues.len()), proxy);
             }
 
             let json = serde_json::json!({
@@ -211,15 +350,26 @@ fn handle_ipc_message(
             let files: Vec<RecoveredFile> = serde_json::from_value(files_val).unwrap_or_default();
             let cancel = CancellationToken::new();
 
+            emit_log(
+                "info",
+                &format!("Starting extraction of {} files to safe target: '{}'", files.len(), dest_path),
+                proxy,
+            );
+
             let mut report_md = String::new();
-            if let Ok(mut reader) = FileBlockReader::open(Path::new(&source_id)) {
+            if let Ok(mut reader) = open_block_reader(&source_id) {
                 if let Ok(report) = Scanner::recover_files(
-                    &mut reader,
+                    &mut *reader,
                     &files,
                     Path::new(&dest_path),
                     &cancel,
                     |_f, _d, _t| {},
                 ) {
+                    emit_log(
+                        "success",
+                        &format!("Recovery completed: {} files written to '{}'", files.len(), dest_path),
+                        proxy,
+                    );
                     report_md = report.to_markdown();
                 }
             }
@@ -233,6 +383,7 @@ fn handle_ipc_message(
         }
         "open_output_folder" => {
             if let Some(path) = msg.payload.get("path").and_then(|v| v.as_str()) {
+                emit_log("info", &format!("Opening output folder in OS file explorer: {}", path), proxy);
                 #[cfg(target_os = "windows")]
                 let _ = std::process::Command::new("explorer").arg(path).spawn();
                 #[cfg(target_os = "linux")]
@@ -241,6 +392,16 @@ fn handle_ipc_message(
         }
         _ => {}
     }
+}
+
+fn emit_log(level: &str, message: &str, proxy: &EventLoopProxy<UserEvent>) {
+    let now = chrono::Local::now().format("%H:%M:%S").to_string();
+    let payload = serde_json::json!({
+        "timestamp": now,
+        "level": level,
+        "message": message,
+    });
+    emit_event("openre-log", &payload.to_string(), proxy);
 }
 
 fn emit_response(msg_id: Option<String>, json_data: &str, proxy: &EventLoopProxy<UserEvent>) {

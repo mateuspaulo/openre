@@ -3,7 +3,7 @@ use recovery_core::{
 };
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub trait BlockReader: Send {
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RecoveryError>;
@@ -94,6 +94,294 @@ impl BlockReader for MemoryBlockReader {
         &self.id
     }
 }
+
+pub struct FolderSpan {
+    pub path: PathBuf,
+    pub start_offset: u64,
+    pub size: u64,
+}
+
+pub struct FolderBlockReader {
+    id: String,
+    spans: Vec<FolderSpan>,
+    total_size: u64,
+}
+
+impl FolderBlockReader {
+    pub fn open(dir_path: &Path) -> Result<Self, RecoveryError> {
+        let mut spans = Vec::new();
+        let mut current_offset = 0u64;
+
+        for entry in walkdir::WalkDir::new(dir_path).into_iter().flatten() {
+            if entry.file_type().is_file() {
+                if let Ok(meta) = entry.metadata() {
+                    let sz = meta.len();
+                    if sz > 0 {
+                        spans.push(FolderSpan {
+                            path: entry.path().to_path_buf(),
+                            start_offset: current_offset,
+                            size: sz,
+                        });
+                        current_offset += sz;
+                    }
+                }
+            }
+        }
+
+        Ok(Self {
+            id: dir_path.to_string_lossy().to_string(),
+            spans,
+            total_size: current_offset,
+        })
+    }
+}
+
+impl BlockReader for FolderBlockReader {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RecoveryError> {
+        if offset >= self.total_size || buf.is_empty() {
+            return Ok(0);
+        }
+
+        let mut total_written = 0usize;
+        let mut cur_offset = offset;
+
+        for span in &self.spans {
+            if total_written >= buf.len() {
+                break;
+            }
+            let span_end = span.start_offset + span.size;
+            if cur_offset >= span.start_offset && cur_offset < span_end {
+                let offset_in_file = cur_offset - span.start_offset;
+                let available_in_span = span.size - offset_in_file;
+                let needed = (buf.len() - total_written) as u64;
+                let to_read = needed.min(available_in_span) as usize;
+
+                if let Ok(mut f) = File::open(&span.path) {
+                    if f.seek(SeekFrom::Start(offset_in_file)).is_ok() {
+                        if let Ok(n) = f.read(&mut buf[total_written..total_written + to_read]) {
+                            total_written += n;
+                            cur_offset += n as u64;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(total_written)
+    }
+
+    fn total_bytes(&self) -> u64 {
+        self.total_size
+    }
+
+    fn device_id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub struct VolumeBlockReader {
+    id: String,
+    file: File,
+    size: u64,
+}
+
+#[cfg(target_os = "windows")]
+impl VolumeBlockReader {
+    pub fn open_volume(drive_letter: char) -> Result<Self, RecoveryError> {
+        let root = format!("{}:\\", drive_letter.to_ascii_uppercase());
+        let device_path = format!(r"\\.\{}:", drive_letter.to_ascii_uppercase());
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(false)
+            .open(&device_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    RecoveryError::PermissionDenied(format!(
+                        "Administrator privileges required to access raw volume {}. Please launch OpenRe with 'Run as Administrator'.",
+                        device_path
+                    ))
+                } else {
+                    RecoveryError::Io(e)
+                }
+            })?;
+
+        let size = get_disk_free_space_windows(&root).unwrap_or(0);
+
+        Ok(Self {
+            id: format!("{}:", drive_letter.to_ascii_uppercase()),
+            file,
+            size,
+        })
+    }
+
+    pub fn open_physical_drive(device_path: &str) -> Result<Self, RecoveryError> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(false)
+            .open(device_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    RecoveryError::PermissionDenied(format!(
+                        "Administrator privileges required to access physical device {}. Please launch OpenRe with 'Run as Administrator'.",
+                        device_path
+                    ))
+                } else {
+                    RecoveryError::Io(e)
+                }
+            })?;
+
+        let size = query_physical_drive_size(&file).unwrap_or(0);
+
+        Ok(Self {
+            id: device_path.to_string(),
+            file,
+            size,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl BlockReader for VolumeBlockReader {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<usize, RecoveryError> {
+        if self.size > 0 && offset >= self.size {
+            return Ok(0);
+        }
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        // Align to 4096-byte boundaries for direct disk sector reading
+        const SECTOR_SIZE: u64 = 4096;
+        let aligned_start = (offset / SECTOR_SIZE) * SECTOR_SIZE;
+        let aligned_end = ((offset + buf.len() as u64 + SECTOR_SIZE - 1) / SECTOR_SIZE) * SECTOR_SIZE;
+        let aligned_len = (aligned_end - aligned_start) as usize;
+
+        let mut scratch = vec![0u8; aligned_len];
+        self.file.seek(SeekFrom::Start(aligned_start))?;
+
+        let bytes_read = self.file.read(&mut scratch)?;
+
+        let start_within_scratch = (offset - aligned_start) as usize;
+        if start_within_scratch >= bytes_read {
+            return Ok(0);
+        }
+
+        let available = bytes_read - start_within_scratch;
+        let to_copy = buf.len().min(available);
+        buf[..to_copy].copy_from_slice(&scratch[start_within_scratch..start_within_scratch + to_copy]);
+        Ok(to_copy)
+    }
+
+    fn total_bytes(&self) -> u64 {
+        self.size
+    }
+
+    fn device_id(&self) -> &str {
+        &self.id
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn query_physical_drive_size(file: &File) -> Option<u64> {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn DeviceIoControl(
+            hDevice: *mut std::ffi::c_void,
+            dwIoControlCode: u32,
+            lpInBuffer: *const std::ffi::c_void,
+            nInBufferSize: u32,
+            lpOutBuffer: *mut std::ffi::c_void,
+            nOutBufferSize: u32,
+            lpBytesReturned: *mut u32,
+            lpOverlapped: *mut std::ffi::c_void,
+        ) -> i32;
+    }
+
+    const IOCTL_DISK_GET_LENGTH_INFO: u32 = 0x00074059;
+    let handle = file.as_raw_handle();
+    let mut length_info: i64 = 0;
+    let mut bytes_returned: u32 = 0;
+
+    let res = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_DISK_GET_LENGTH_INFO,
+            std::ptr::null(),
+            0,
+            &mut length_info as *mut i64 as *mut std::ffi::c_void,
+            std::mem::size_of::<i64>() as u32,
+            &mut bytes_returned,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if res != 0 && length_info > 0 {
+        Some(length_info as u64)
+    } else {
+        None
+    }
+}
+
+/// Opens any storage source (file, directory, raw Windows volume, physical drive)
+/// returning a unified Box<dyn BlockReader>.
+pub fn open_block_reader(source_id: &str) -> Result<Box<dyn BlockReader>, RecoveryError> {
+    let path = Path::new(source_id);
+
+    // 1. If it's a directory on disk, open as FolderBlockReader
+    if path.is_dir() {
+        return Ok(Box::new(FolderBlockReader::open(path)?));
+    }
+
+    // 2. If it's a regular file or raw disk image (.img, .dd, etc.)
+    if path.is_file() {
+        return Ok(Box::new(FileBlockReader::open(path)?));
+    }
+
+    // 3. Windows logical drive letters (e.g. "C:", "C:\", "D:", "d:")
+    #[cfg(target_os = "windows")]
+    {
+        let trimmed = source_id.trim();
+        let is_drive_letter = if trimmed.len() == 2 && trimmed.ends_with(':') {
+            trimmed.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+        } else if trimmed.len() == 3 && trimmed.ends_with(":\\") {
+            trimmed.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+        } else {
+            false
+        };
+
+        if is_drive_letter {
+            let letter = trimmed.chars().next().unwrap();
+            match VolumeBlockReader::open_volume(letter) {
+                Ok(reader) => return Ok(Box::new(reader)),
+                Err(RecoveryError::PermissionDenied(msg)) => {
+                    return Err(RecoveryError::PermissionDenied(msg));
+                }
+                Err(e) => {
+                    // If opening raw volume failed, check if directory root exists as fallback
+                    let root_str = format!("{}:\\", letter);
+                    let root_path = Path::new(&root_str);
+                    if root_path.is_dir() {
+                        return Ok(Box::new(FolderBlockReader::open(root_path)?));
+                    }
+                    return Err(e);
+                }
+            }
+        }
+
+        // 4. Windows PhysicalDrive handles (e.g. "\\.\PhysicalDrive0")
+        if trimmed.starts_with(r"\\.\") {
+            return Ok(Box::new(VolumeBlockReader::open_physical_drive(trimmed)?));
+        }
+    }
+
+    // 5. Fallback: try FileBlockReader
+    Ok(Box::new(FileBlockReader::open(path)?))
+}
+
 
 /// Enumerate available drives, volumes, and removable media
 pub fn enumerate_devices() -> Vec<DeviceInfo> {
@@ -320,5 +608,50 @@ mod tests {
         assert_eq!(readback[0], 0xAA);
 
         let _ = std::fs::remove_file(image_path);
+    }
+
+    #[test]
+    fn test_folder_block_reader() {
+        let temp_dir = std::env::temp_dir().join("test_openre_folder_reader");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let f1 = temp_dir.join("file1.bin");
+        let f2 = temp_dir.join("file2.bin");
+        std::fs::write(&f1, b"HELLO_").unwrap();
+        std::fs::write(&f2, b"WORLD!").unwrap();
+
+        let mut folder_reader = FolderBlockReader::open(&temp_dir).expect("Should open folder");
+        assert_eq!(folder_reader.total_bytes(), 12);
+
+        let mut buf = [0u8; 12];
+        let n = folder_reader.read_at(0, &mut buf).expect("Read should succeed");
+        assert_eq!(n, 12);
+        assert_eq!(&buf, b"HELLO_WORLD!");
+
+        // Read with offset
+        let mut part = [0u8; 5];
+        let n_part = folder_reader.read_at(6, &mut part).expect("Partial read should succeed");
+        assert_eq!(n_part, 5);
+        assert_eq!(&part, b"WORLD");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_open_block_reader_on_directory() {
+        let temp_dir = std::env::temp_dir().join("test_openre_dir_detect");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let f1 = temp_dir.join("sample.txt");
+        std::fs::write(&f1, b"DATA123").unwrap();
+
+        let reader_res = open_block_reader(&temp_dir.to_string_lossy());
+        assert!(reader_res.is_ok(), "Directory should open as block reader");
+        let reader = reader_res.unwrap();
+        assert_eq!(reader.total_bytes(), 7);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

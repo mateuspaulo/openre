@@ -8,3 +8,5 @@ description = "Cross-platform read-only device access, disk imaging, and device 
 
 [dependencies]
 recovery-core = { workspace = true }
+walkdir = { workspace = true }
+

@@ -30,6 +30,9 @@ import {
   Sliders,
   FolderCheck,
   Database,
+  Terminal,
+  Copy,
+  Trash2,
 } from 'lucide-react';
 
 interface DeviceInfo {
@@ -82,6 +85,13 @@ interface RepairReport {
   success: boolean;
 }
 
+interface LogEntry {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'success';
+  message: string;
+}
+
 export default function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [language, setLanguage] = useState<'en' | 'pt'>('en');
@@ -101,6 +111,7 @@ export default function App() {
 
   // Scan state
   const [isScanning, setIsScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [scanProgress, setScanProgress] = useState({
     percent: 0,
     scannedBytes: 0,
@@ -111,6 +122,42 @@ export default function App() {
   });
   const [discoveredFiles, setDiscoveredFiles] = useState<RecoveredFile[]>([]);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
+
+  // Terminal & Diagnostics state
+  const [showTerminal, setShowTerminal] = useState<boolean>(true);
+  const [terminalLogs, setTerminalLogs] = useState<LogEntry[]>([
+    {
+      id: 'init-1',
+      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+      level: 'info',
+      message: 'OpenRe v0.1.0 engine initialized in strict offline-first mode. Zero telemetry active.',
+    },
+    {
+      id: 'init-2',
+      timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
+      level: 'success',
+      message: 'All device & partition readers configured for strictly non-destructive read-only operation.',
+    },
+  ]);
+  const terminalEndRef = React.useRef<HTMLDivElement | null>(null);
+
+  const appendLog = (level: 'info' | 'warn' | 'error' | 'success', message: string, timestamp?: string) => {
+    const timeStr = timestamp || new Date().toLocaleTimeString('en-US', { hour12: false });
+    const newEntry: LogEntry = {
+      id: Math.random().toString(36).substring(2, 9),
+      timestamp: timeStr,
+      level,
+      message,
+    };
+    setTerminalLogs((prev) => [...prev.slice(-300), newEntry]);
+  };
+
+  useEffect(() => {
+    if (showTerminal && terminalEndRef.current) {
+      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [terminalLogs, showTerminal]);
+
 
   // Preview Drawer state
   const [previewFile, setPreviewFile] = useState<RecoveredFile | null>(null);
@@ -179,7 +226,9 @@ export default function App() {
 
     const onBackendEvent = (e: any) => {
       const { type, payload } = e.detail || {};
-      if (type === 'scan_progress') {
+      if (type === 'openre-log') {
+        appendLog(payload.level || 'info', payload.message || '', payload.timestamp);
+      } else if (type === 'scan_progress') {
         const pct = payload.total_bytes > 0 ? (payload.bytes_scanned / payload.total_bytes) * 100 : 0;
         setScanProgress({
           percent: Math.min(100, Math.round(pct)),
@@ -191,9 +240,19 @@ export default function App() {
         });
       } else if (type === 'scan_completed') {
         setIsScanning(false);
+        setScanError(null);
         setDiscoveredFiles(payload.files || []);
         setSelectedFileIds(new Set((payload.files || []).map((f: any) => f.id)));
         setCurrentStep(5);
+        appendLog('success', `Scan complete. Found ${(payload.files || []).length} recoverable items.`);
+      } else if (type === 'scan_error') {
+        setIsScanning(false);
+        setScanError(payload.error || 'Scan stopped due to an error.');
+        setScanProgress((prev) => ({
+          ...prev,
+          currentLabel: `Scan halted: ${payload.error}`,
+        }));
+        appendLog('error', `Scan halted: ${payload.error}`);
       }
     };
 
@@ -204,7 +263,9 @@ export default function App() {
   const handleStartScan = () => {
     if (!selectedSource) return;
     setIsScanning(true);
+    setScanError(null);
     setCurrentStep(4);
+    appendLog('info', `Starting ${scanMode.toUpperCase()} scan on ${selectedSource.name}...`);
     setScanProgress({
       percent: 0,
       scannedBytes: 0,
@@ -222,9 +283,11 @@ export default function App() {
   };
 
   const handleCancelScan = () => {
+    appendLog('warn', 'Scan cancel requested by user.');
     sendIpc('cancel_scan');
     setIsScanning(false);
   };
+
 
   const handleSelectDestFolder = async () => {
     const selected = await sendIpc('select_folder');
@@ -336,6 +399,25 @@ export default function App() {
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>100% Offline & Private</span>
           </div>
+
+          {/* Diagnostic Terminal Toggle Button */}
+          <button
+            onClick={() => setShowTerminal(!showTerminal)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono transition ${
+              showTerminal
+                ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-slate-200'
+            }`}
+            title={showTerminal ? 'Hide Terminal (Rodapé)' : 'Show Terminal (Rodapé)'}
+          >
+            <Terminal className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Terminal</span>
+            {terminalLogs.length > 0 && (
+              <span className="text-[10px] px-1 rounded bg-black/40 text-slate-300">
+                {terminalLogs.length}
+              </span>
+            )}
+          </button>
 
           <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -761,33 +843,93 @@ export default function App() {
 
         {/* STEP 4: Scanning Screen */}
         {currentStep === 4 && (
-          <div className="flex-1 min-h-0 flex flex-col items-center justify-center max-w-2xl mx-auto w-full">
-            <div className="w-16 h-16 rounded-full bg-sky-500/10 text-sky-400 flex items-center justify-center mb-6 animate-pulse">
-              <FileSearch className="w-8 h-8" />
-            </div>
+          <div className="flex-1 min-h-0 flex flex-col items-center justify-center max-w-2xl mx-auto w-full p-4">
+            {scanError ? (
+              <div className="w-full bg-slate-900 border border-rose-500/40 rounded-2xl p-6 text-center shadow-xl">
+                <div className="w-14 h-14 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto mb-4">
+                  <AlertTriangle className="w-7 h-7" />
+                </div>
+                <h2 className="text-xl font-bold text-rose-300 mb-2">
+                  {language === 'en' ? 'Scan Interrupted / Drive Access Error' : 'Erro no Acesso à Unidade / Varredura Interrompida'}
+                </h2>
+                <p className="text-xs text-slate-300 font-mono bg-black/40 p-3 rounded-lg border border-slate-800 mb-4 max-h-28 overflow-y-auto break-all">
+                  {scanError}
+                </p>
+                <div className="text-xs text-slate-400 text-left bg-slate-950/60 p-3.5 rounded-lg border border-slate-800/80 mb-6 space-y-2">
+                  <div className="font-semibold text-slate-300">
+                    {language === 'en' ? 'Resolution & Troubleshooting:' : 'Como Resolver:'}
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-sky-400 font-bold">•</span>
+                    <span>
+                      {language === 'en'
+                        ? 'Administrator Elevation: Raw sector access to Windows logical drives (e.g. C:, D:) requires running OpenRe as Administrator. Right-click OpenRe.exe and choose "Run as Administrator".'
+                        : 'Permissão de Administrador: O acesso direto a setores brutos de discos no Windows exige executar o OpenRe como Administrador. Clique com botão direito no OpenRe.exe e selecione "Executar como Administrador".'}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-sky-400 font-bold">•</span>
+                    <span>
+                      {language === 'en'
+                        ? 'Un-elevated Mode: You can select a specific folder (e.g. Pictures, Documents, or disk image .img/.dd) to scan without requiring administrator privileges.'
+                        : 'Modo sem Elevação: Você pode selecionar uma pasta específica (ex: Imagens, Documentos, ou arquivo de imagem .img/.dd) para varrer sem precisar de direitos de administrador.'}
+                    </span>
+                  </div>
+                </div>
 
-            <h2 className="text-2xl font-bold mb-2">Scanning in Progress</h2>
-            <p className="text-xs text-slate-400 mb-8">{scanProgress.currentLabel}</p>
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={() => {
+                      setScanError(null);
+                      setCurrentStep(1);
+                    }}
+                    className="px-5 py-2.5 rounded-lg border border-slate-700 hover:bg-slate-800 text-xs font-medium text-slate-200 transition flex items-center gap-2"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    {language === 'en' ? 'Choose Different Storage' : 'Escolher Outro Armazenamento'}
+                  </button>
+                  <button
+                    onClick={handleStartScan}
+                    className="px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md transition flex items-center gap-2"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    {language === 'en' ? 'Retry Scan' : 'Tentar Novamente'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="w-16 h-16 rounded-full bg-sky-500/10 text-sky-400 flex items-center justify-center mb-6 animate-pulse">
+                  <FileSearch className="w-8 h-8" />
+                </div>
 
-            <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden mb-4">
-              <div
-                className="bg-gradient-to-r from-sky-500 to-indigo-500 h-full transition-all duration-300 ease-out"
-                style={{ width: `${scanProgress.percent}%` }}
-              />
-            </div>
+                <h2 className="text-2xl font-bold mb-2">
+                  {language === 'en' ? 'Scanning in Progress' : 'Varredura em Andamento'}
+                </h2>
+                <p className="text-xs text-slate-400 mb-8">{scanProgress.currentLabel}</p>
 
-            <div className="w-full flex items-center justify-between text-xs text-slate-400 font-mono mb-8">
-              <span>{scanProgress.percent}%</span>
-              <span>Speed: {scanProgress.speedMBps} MB/s</span>
-              <span>Files Discovered: {scanProgress.filesCount}</span>
-            </div>
+                <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden mb-4">
+                  <div
+                    className="bg-gradient-to-r from-sky-500 to-indigo-500 h-full transition-all duration-300 ease-out"
+                    style={{ width: `${scanProgress.percent}%` }}
+                  />
+                </div>
 
-            <button
-              onClick={handleCancelScan}
-              className="px-5 py-2 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition flex items-center gap-2"
-            >
-              <Square className="w-3.5 h-3.5 fill-current" /> Stop Scan
-            </button>
+                <div className="w-full flex items-center justify-between text-xs text-slate-400 font-mono mb-8">
+                  <span>{scanProgress.percent}%</span>
+                  <span>Speed: {scanProgress.speedMBps} MB/s</span>
+                  <span>{language === 'en' ? 'Files Discovered' : 'Arquivos Encontrados'}: {scanProgress.filesCount}</span>
+                </div>
+
+                <button
+                  onClick={handleCancelScan}
+                  className="px-5 py-2 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition flex items-center gap-2"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  {language === 'en' ? 'Stop Scan' : 'Parar Varredura'}
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -1024,6 +1166,94 @@ export default function App() {
         )}
       </main>
 
+      {/* Docked Footer Diagnostic Terminal */}
+      {showTerminal && (
+        <div className="shrink-0 border-t border-slate-800 bg-slate-950 flex flex-col transition-all duration-150 shadow-2xl z-30 select-none">
+          {/* Terminal Titlebar */}
+          <div className="h-8 px-4 bg-slate-900/90 border-b border-slate-800/80 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-2 w-2 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="font-mono font-semibold text-slate-300 flex items-center gap-1.5">
+                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                {language === 'en' ? 'Diagnostic Terminal & System Logs' : 'Terminal de Diagnóstico & Logs do Sistema'}
+              </span>
+              <span className="px-1.5 py-0.2 rounded bg-slate-800 text-[10px] font-mono text-slate-400">
+                {terminalLogs.length} {language === 'en' ? 'events' : 'eventos'}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => {
+                  const text = terminalLogs.map((l) => `[${l.timestamp}] [${l.level.toUpperCase()}] ${l.message}`).join('\n');
+                  navigator.clipboard?.writeText(text);
+                  appendLog('info', 'All terminal logs copied to clipboard.');
+                }}
+                className="px-2 py-0.5 rounded text-[11px] font-mono text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition flex items-center gap-1"
+                title={language === 'en' ? 'Copy logs to clipboard' : 'Copiar logs para a área de transferência'}
+              >
+                <Copy className="w-3 h-3" />
+                <span>{language === 'en' ? 'Copy' : 'Copiar'}</span>
+              </button>
+
+              <button
+                onClick={() => setTerminalLogs([])}
+                className="px-2 py-0.5 rounded text-[11px] font-mono text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition flex items-center gap-1"
+                title={language === 'en' ? 'Clear terminal output' : 'Limpar terminal'}
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>{language === 'en' ? 'Clear' : 'Limpar'}</span>
+              </button>
+
+              <button
+                onClick={() => setShowTerminal(false)}
+                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition ml-1"
+                title={language === 'en' ? 'Close terminal panel (can be re-opened in Header or Settings)' : 'Fechar terminal (pode ser reaberto no Cabeçalho ou Configurações)'}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Terminal Console Output */}
+          <div className="h-32 max-h-40 overflow-y-auto p-2.5 font-mono text-[11px] space-y-1 select-text bg-black/80">
+            {terminalLogs.length === 0 ? (
+              <p className="text-slate-500 italic text-center py-4">
+                {language === 'en' ? 'No log events. System ready.' : 'Nenhum evento registrado. Sistema pronto.'}
+              </p>
+            ) : (
+              terminalLogs.map((log) => {
+                let color = 'text-sky-300';
+                let badge = 'bg-sky-950 text-sky-400 border border-sky-800/60';
+                if (log.level === 'success') {
+                  color = 'text-emerald-300';
+                  badge = 'bg-emerald-950 text-emerald-400 border border-emerald-800/60';
+                } else if (log.level === 'warn') {
+                  color = 'text-amber-300';
+                  badge = 'bg-amber-950 text-amber-400 border border-amber-800/60';
+                } else if (log.level === 'error') {
+                  color = 'text-rose-300 font-semibold';
+                  badge = 'bg-rose-950 text-rose-400 border border-rose-800/60';
+                }
+                return (
+                  <div key={log.id} className="flex items-start gap-2 leading-relaxed hover:bg-white/[0.03] px-1 py-0.5 rounded">
+                    <span className="text-slate-500 shrink-0 select-none">[{log.timestamp}]</span>
+                    <span className={`px-1.5 py-0.2 text-[9px] uppercase rounded font-bold shrink-0 select-none ${badge}`}>
+                      {log.level}
+                    </span>
+                    <span className={`break-all ${color}`}>{log.message}</span>
+                  </div>
+                );
+              })
+            )}
+            <div ref={terminalEndRef} />
+          </div>
+        </div>
+      )}
+
       {/* Slide-out Preview Drawer */}
       {previewFile && (
         <div className="fixed inset-y-0 right-0 w-[480px] bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col z-50">
@@ -1227,6 +1457,28 @@ export default function App() {
                   onChange={(e) => setMaxBufferSizeMb(Number(e.target.value))}
                   className="w-full accent-sky-500"
                 />
+              </div>
+
+              {/* Terminal Visibility Toggle */}
+              <div className="pt-2 border-t border-slate-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-slate-300">
+                      {language === 'en' ? 'Show Diagnostic Terminal in Footer' : 'Exibir Terminal de Diagnóstico no Rodapé'}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {language === 'en'
+                        ? 'Displays real-time technical operations, block reads, and warnings in the bottom panel.'
+                        : 'Exibe operações técnicas em tempo real, leitura de blocos e alertas no painel inferior.'}
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={showTerminal}
+                    onChange={(e) => setShowTerminal(e.target.checked)}
+                    className="w-4 h-4 accent-sky-500 rounded cursor-pointer"
+                  />
+                </div>
               </div>
             </div>
 

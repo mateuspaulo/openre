@@ -41,14 +41,14 @@
 | **`crates/file-carving`** | Completed | 15+ formats (JPEG, PNG, GIF, WebP, BMP, TIFF, PDF, ZIP, DOCX, XLSX, PPTX, MP3, WAV, MP4, MKV) |
 | **`crates/file-preview`** | Completed | Safe in-memory thumbnailing, hex viewer with ASCII column, metadata extraction |
 | **`crates/image-repair`** | Completed | Non-destructive JPEG EOI restoration, PNG chunk CRC recalculation |
-| **`crates/device-access`** | Completed | Windows volume & physical drive enumeration, raw disk image reader, disk cloner with bad sector logging |
+| **`crates/device-access`** | Completed | Windows volume & physical drive enumeration, sector-aligned raw reader, FolderBlockReader virtual stream, raw disk image reader, disk cloner with bad sector logging |
 | **`crates/reporting`** | Completed | Local audit report generator in Markdown, JSON, and CSV |
-| **`crates/scanner`** | Completed | Quick Scan (filesystem metadata) and Deep Scan (block carving with bounded sliding window) |
+| **`crates/scanner`** | Completed | Quick Scan (filesystem metadata) and Deep Scan (block carving with bounded sliding window and throttled event dispatch) |
 | **`crates/openre-cli`** | Completed | Headless CLI diagnostic tool (`openre-cli.exe` built in release mode) |
-| **`src-tauri` (GUI)** | Completed | Native Windows desktop application (`OpenRe.exe`) with embedded WebView2 UI and IPC |
-| **Desktop Frontend** | Completed | React 19 + TypeScript + Tailwind CSS, 7-step guided workflow, dark/light themes |
-| **Automated Test Suite** | Completed | 22 tests passing: 20 unit tests, 1 security network isolation test, 1 end-to-end synthetic recovery test |
-| **Windows Portable Release**| Completed | `release/OpenRe-Windows-x64-Portable.zip` (~6.97 MB) with SHA-256 verified |
+| **`src-tauri` (GUI)** | Completed | Native Windows desktop application (`OpenRe.exe`) with embedded WebView2 UI, real-time IPC logging, and sector access error handling |
+| **Desktop Frontend** | Completed | React 19 + TypeScript + Tailwind CSS, 7-step guided workflow, docked Diagnostic Terminal with live logs, dark/light themes, settings modal |
+| **Automated Test Suite** | Completed | 24 tests passing: 22 unit tests, 1 security network isolation test, 1 end-to-end synthetic recovery test |
+| **Windows Portable Release**| Completed | `release/OpenRe-Windows-x64-Portable.zip` with SHA-256 verified |
 | **Packaging Workflows** | Completed | GitHub Actions CI & Release workflows, Debian `.deb` packaging script (`scripts/build_deb.sh`) |
 | **Portuguese Guide** | Completed | Natural Brazilian Portuguese installation manual at `docs/installation/INSTALLATION_PT_BR.md` |
 
@@ -57,8 +57,8 @@
 ## 4. Test Results Summary
 
 ```text
-running 22 tests across 8 crates:
-- device_access: 2 passed; 0 failed
+running 24 tests across 8 crates:
+- device_access: 4 passed; 0 failed (added FolderBlockReader and open_block_reader tests)
 - file_carving: 4 passed; 0 failed
 - file_preview: 2 passed; 0 failed
 - filesystem: 3 passed; 0 failed
@@ -69,14 +69,15 @@ running 22 tests across 8 crates:
 - test_network_isolation: 1 passed; 0 failed (Zero network sockets / dependencies verified)
 - test_end_to_end_recovery: 1 passed; 0 failed (Full synthetic recovery pipeline verified)
 
-Total: 22 passed; 0 failed; 0 ignored; 100% success rate.
+Total: 24 passed; 0 failed; 0 ignored; 100% success rate.
 ```
 
 ---
 
 ## 5. Built Release Artifacts
 
-- **Windows Portable Distribution:** `release/OpenRe-Windows-x64-Portable.zip` (6,971,662 bytes)
-- **SHA-256 Checksum:** `36edff37e00c25b5d9ef8a1d25e24e4ed1265dfa55557c29f495c4b2af4b95bc`
-- **Main GUI Executable:** `target/x86_64-pc-windows-gnu/release/OpenRe.exe` (11,126,329 bytes)
+- **Windows Portable Distribution:** `release/OpenRe-Windows-x64-Portable.zip` (6,981,876 bytes)
+- **SHA-256 Checksum:** `0e1091bb1493d69d8fcb4ba0e5849f1fd3937ef6d072b4cf998e610f4dfcc7e7`
+- **Main GUI Executable:** `target/x86_64-pc-windows-gnu/release/OpenRe.exe` (~11.1 MB)
 - **CLI Diagnostic Executable:** `target/x86_64-pc-windows-gnu/release/openre-cli.exe` (8,695,930 bytes)
+
