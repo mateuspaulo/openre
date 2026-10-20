@@ -9,6 +9,36 @@
 
 ---
 
+## 📸 Interface Screenshots
+
+<div align="center">
+  <img src="docs/screenshots/01_dashboard.png" alt="OpenRe Dashboard — Step-by-step guided recovery wizard" width="850">
+  <p><em>OpenRe Guided Dashboard — Intuitive entry points for deleted file recovery, disk carving, and raw disk images.</em></p>
+</div>
+
+<br>
+
+<div align="center">
+  <img src="docs/screenshots/02_scan_progress.png" alt="OpenRe Deep Scan in Progress with Real-Time Terminal" width="850">
+  <p><em>High-Performance Scan Engine — Real-time progress, read speed (MB/s), file counters, and integrated live diagnostics terminal.</em></p>
+</div>
+
+<br>
+
+<div align="center">
+  <img src="docs/screenshots/03_review_preview.png" alt="OpenRe File Review, Real Preview & Instant Save/Repair" width="850">
+  <p><em>Review & Instant Sandbox Preview — View multimedia streams, inspect byte sectors, review metadata allocation, and save recovered files directly.</em></p>
+</div>
+
+<br>
+
+<div align="center">
+  <img src="docs/screenshots/04_preferences_safety.png" alt="OpenRe Engine Preferences and Safety Configuration" width="850">
+  <p><em>Forensic Preferences & Safety Controls — Configurable carving stride (512 vs 4096 bytes), buffer sizes, language, and same-drive collision protection.</em></p>
+</div>
+
+---
+
 ## 📖 Translations / Traduções
 - 🇧🇷 **Guia de Instalação e Uso em Português do Brasil:** [docs/installation/INSTALLATION_PT_BR.md](docs/installation/INSTALLATION_PT_BR.md)
 - 🇬🇧 **English User & Installation Manual:** [docs/installation/INSTALLATION_EN.md](docs/installation/INSTALLATION_EN.md)
@@ -46,9 +76,9 @@
 
 | Platform | Distribution Format | Requirements |
 | :--- | :--- | :--- |
-| **Windows 10 / 11 (x64)** | `OpenRe-Windows-x64-Portable.zip` | Standalone executable (`OpenRe.exe`), no installation required. |
-| **Ubuntu Linux (amd64)** | `openre_amd64.deb` | Ubuntu 22.04 LTS+, Debian 12+, `libwebkit2gtk-4.1`. |
-| **Linux (Universal)** | `OpenRe-Linux-x64.AppImage` | Any modern 64-bit Linux distribution. |
+| **Windows 10 / 11 (x64)** | [`OpenRe-Windows-x64-Portable.zip`](https://github.com/mateuspaulo/openre/releases/latest) | Standalone portable executable (`OpenRe.exe`), no installation required. |
+| **Ubuntu / Debian / Mint (amd64)** | [`openre_amd64.deb`](https://github.com/mateuspaulo/openre/releases/latest) | `sudo apt install ./openre_amd64.deb` (includes desktop launcher & icon). |
+| **Linux Universal (x86_64)** | [`OpenRe-Linux-x64.tar.gz`](https://github.com/mateuspaulo/openre/releases/latest) | Portable static Musl distribution for Fedora, Arch, SUSE, Alpine, etc. |
 
 ---
 

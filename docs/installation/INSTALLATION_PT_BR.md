@@ -48,6 +48,8 @@ Seja bem-vindo ao **OpenRe**, um aplicativo de código aberto, gratuito e voltad
 
 ## 4. Passo a Passo para uma Recuperação Segura
 
+![Dashboard Inicial do OpenRe](../screenshots/01_dashboard.png)
+
 O OpenRe guia você em 7 etapas práticas:
 
 1. **Selecionar a Origem:** Escolha a partição, disco físico, pasta ou imagem de disco (`.img` / `.dd`) onde estavam os arquivos apagados.
@@ -57,6 +59,9 @@ O OpenRe guia você em 7 etapas práticas:
 3. **Filtros:** Filtre previamente por categoria (Imagens, Documentos, Vídeos, Áudio) ou tamanho se desejar agilizar a busca.
 4. **Varredura:** Acompanhe o progresso em tempo real, velocidade de leitura, arquivos encontrados e integridade detectada.
 5. **Pré-Visualização (Preview):** Visualize miniaturas de fotos, visualizador hexadecimal de blocos e metadados antes de iniciar a extração.
+   
+   ![Revisão e Pré-visualização de Arquivos](../screenshots/03_review_preview.png)
+
 6. **Destino da Recuperação:** **ATENÇÃO:** Escolha SEMPRE um disco diferente do disco de origem (por exemplo, recupere de `C:` para `D:` ou para um pendrive externo). O OpenRe bloqueia por padrão a seleção do mesmo disco para proteger seus dados contra sobrescrita permanente.
 7. **Relatório Final:** Visualize o resumo completo com quantidade de bytes restaurados, hashes de integridade e possíveis avisos de arquivos truncados.
 
