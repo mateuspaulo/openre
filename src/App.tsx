@@ -1,0 +1,1072 @@
+import React, { useState, useEffect } from 'react';
+import {
+  HardDrive,
+  FileSearch,
+  ShieldCheck,
+  RotateCcw,
+  Settings,
+  Info,
+  FolderOpen,
+  ArrowRight,
+  ArrowLeft,
+  CheckCircle2,
+  AlertTriangle,
+  FileText,
+  Image as ImageIcon,
+  Video,
+  Music,
+  Archive,
+  Eye,
+  Wrench,
+  Download,
+  Moon,
+  Sun,
+  X,
+  Play,
+  Square,
+  LayoutGrid,
+  List,
+} from 'lucide-react';
+
+interface DeviceInfo {
+  id: string;
+  name: string;
+  device_type: string;
+  mount_point?: string;
+  size_bytes: number;
+  filesystem?: string;
+  is_read_only: boolean;
+  requires_elevation: boolean;
+}
+
+interface RecoveredFile {
+  id: string;
+  filename: string;
+  original_path?: string;
+  category: 'Image' | 'Document' | 'Video' | 'Audio' | 'Archive' | 'Text' | 'Other';
+  extension: string;
+  size_bytes: number;
+  source_offset: number;
+  integrity: string;
+  created_at?: string;
+  modified_at?: string;
+  metadata_source: string;
+  sha256?: string;
+}
+
+interface HexLine {
+  offset: string;
+  hex: string;
+  ascii: string;
+}
+
+interface PreviewData {
+  preview_type: string;
+  thumbnail_base64?: string;
+  dimensions?: [number, number];
+  hex_dump: HexLine[];
+  text_snippet?: string;
+  metadata_entries: [string, string][];
+}
+
+interface RepairReport {
+  original_size: number;
+  repaired_size: number;
+  detected_format: string;
+  issues_found: string[];
+  fixes_applied: string[];
+  success: boolean;
+}
+
+export default function App() {
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [currentStep, setCurrentStep] = useState<number>(0); // 0 = Dashboard, 1..7 = Workflow
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [selectedSource, setSelectedSource] = useState<DeviceInfo | null>(null);
+  const [scanMode, setScanMode] = useState<'quick' | 'deep' | 'image'>('quick');
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([
+    'Image', 'Document', 'Video', 'Audio', 'Archive', 'Text', 'Other'
+  ]);
+
+  // Scan state
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanProgress, setScanProgress] = useState({
+    percent: 0,
+    scannedBytes: 0,
+    totalBytes: 0,
+    speedMBps: 0,
+    filesCount: 0,
+    currentLabel: 'Ready',
+  });
+  const [discoveredFiles, setDiscoveredFiles] = useState<RecoveredFile[]>([]);
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
+
+  // Preview Drawer state
+  const [previewFile, setPreviewFile] = useState<RecoveredFile | null>(null);
+  const [previewData, setPreviewData] = useState<PreviewData | null>(null);
+  const [repairReport, setRepairReport] = useState<RepairReport | null>(null);
+
+  // Recovery state
+  const [destPath, setDestPath] = useState<string>('');
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [recoveryDone, setRecoveryDone] = useState(false);
+  const [recoveryReportMd, setRecoveryReportMd] = useState<string>('');
+  const [collisionWarning, setCollisionWarning] = useState<string | null>(null);
+
+  // View state
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterCategory, setFilterCategory] = useState<string>('All');
+
+  // Modals
+  const [showSettings, setShowSettings] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
+
+  // IPC Bridge Helper
+  const sendIpc = (cmd: string, payload: any = {}): Promise<any> => {
+    return new Promise((resolve) => {
+      const msgId = Math.random().toString(36).substring(2);
+      const handler = (event: any) => {
+        if (event.detail && event.detail.msgId === msgId) {
+          window.removeEventListener('openre-response' as any, handler);
+          resolve(event.detail.data);
+        }
+      };
+      window.addEventListener('openre-response' as any, handler);
+
+      if ((window as any).ipc) {
+        (window as any).ipc.postMessage(JSON.stringify({ cmd, msgId, payload }));
+      } else {
+        // Fallback for browser preview / testing
+        simulateIpc(cmd, payload, resolve);
+      }
+    });
+  };
+
+  const simulateIpc = (cmd: string, payload: any, resolve: (res: any) => void) => {
+    if (cmd === 'list_devices') {
+      resolve([
+        { id: 'C:', name: 'Local Disk (C:)', device_type: 'Volume', size_bytes: 512110190592, is_read_only: false, requires_elevation: false },
+        { id: 'D:', name: 'Data Drive (D:)', device_type: 'Volume', size_bytes: 1000204886016, is_read_only: false, requires_elevation: false },
+        { id: 'E:', name: 'USB Flash Drive (E:)', device_type: 'Volume', size_bytes: 32000000000, is_read_only: false, requires_elevation: false },
+        { id: '\\\\.\\PhysicalDrive0', name: 'Physical Drive 0 (NVMe SSD)', device_type: 'PhysicalDrive', size_bytes: 512110190592, is_read_only: false, requires_elevation: true },
+      ]);
+    } else if (cmd === 'select_folder') {
+      resolve('D:\\OpenRe_Recovered_Files');
+    } else if (cmd === 'select_image_file') {
+      resolve('D:\\backups\\disk_dump.img');
+    } else {
+      resolve({});
+    }
+  };
+
+  useEffect(() => {
+    sendIpc('list_devices').then((devs) => {
+      if (Array.isArray(devs)) setDevices(devs);
+    });
+
+    // Listen to real-time events from Rust backend
+    const onBackendEvent = (e: any) => {
+      const { type, payload } = e.detail || {};
+      if (type === 'scan_progress') {
+        const pct = payload.total_bytes > 0 ? (payload.bytes_scanned / payload.total_bytes) * 100 : 0;
+        setScanProgress({
+          percent: Math.min(100, Math.round(pct)),
+          scannedBytes: payload.bytes_scanned,
+          totalBytes: payload.total_bytes,
+          speedMBps: Math.round((payload.speed_bytes_per_sec / (1024 * 1024)) * 10) / 10,
+          filesCount: payload.files_found,
+          currentLabel: payload.current_label || 'Scanning...',
+        });
+      } else if (type === 'scan_completed') {
+        setIsScanning(false);
+        setDiscoveredFiles(payload.files || []);
+        setSelectedFileIds(new Set((payload.files || []).map((f: any) => f.id)));
+        setCurrentStep(5);
+      }
+    };
+
+    window.addEventListener('openre-event' as any, onBackendEvent);
+    return () => window.removeEventListener('openre-event' as any, onBackendEvent);
+  }, []);
+
+  const handleStartScan = () => {
+    if (!selectedSource) return;
+    setIsScanning(true);
+    setCurrentStep(4);
+    setScanProgress({
+      percent: 0,
+      scannedBytes: 0,
+      totalBytes: selectedSource.size_bytes || 1024 * 1024 * 1024,
+      speedMBps: 0,
+      filesCount: 0,
+      currentLabel: 'Starting scan...',
+    });
+
+    sendIpc('start_scan', {
+      source_id: selectedSource.id,
+      mode: scanMode,
+      categories: selectedCategories,
+    });
+  };
+
+  const handleCancelScan = () => {
+    sendIpc('cancel_scan');
+    setIsScanning(false);
+  };
+
+  const handleSelectDestFolder = async () => {
+    const selected = await sendIpc('select_folder');
+    if (selected) {
+      setDestPath(selected);
+      // Validate collision
+      if (selectedSource) {
+        const sourceLetter = selectedSource.id.substring(0, 2).toUpperCase();
+        const destLetter = selected.substring(0, 2).toUpperCase();
+        if (sourceLetter.endsWith(':') && sourceLetter === destLetter) {
+          setCollisionWarning(
+            `Destination drive (${destLetter}) matches the source drive being recovered! Writing files to the same drive overwrites deleted data. Select a different drive.`
+          );
+        } else {
+          setCollisionWarning(null);
+        }
+      }
+    }
+  };
+
+  const handleStartRecovery = async () => {
+    if (!destPath || collisionWarning) return;
+    setIsRecovering(true);
+    const targetFiles = discoveredFiles.filter((f) => selectedFileIds.has(f.id));
+
+    const res = await sendIpc('recover_files', {
+      source_id: selectedSource?.id,
+      files: targetFiles,
+      destination_path: destPath,
+    });
+
+    setIsRecovering(false);
+    setRecoveryDone(true);
+    setRecoveryReportMd(res?.report_markdown || 'Recovery report generated successfully.');
+    setCurrentStep(7);
+  };
+
+  const openPreview = async (file: RecoveredFile) => {
+    setPreviewFile(file);
+    setRepairReport(null);
+    const data = await sendIpc('get_file_preview', {
+      source_id: selectedSource?.id,
+      source_offset: file.source_offset,
+      size_bytes: file.size_bytes,
+      extension: file.extension,
+    });
+    setPreviewData(data);
+  };
+
+  const handleRepairCopy = async () => {
+    if (!previewFile) return;
+    const report = await sendIpc('repair_file', {
+      source_id: selectedSource?.id,
+      source_offset: previewFile.source_offset,
+      size_bytes: previewFile.size_bytes,
+      filename: previewFile.filename,
+    });
+    setRepairReport(report);
+  };
+
+  const filteredFiles = discoveredFiles.filter((f) => {
+    const matchCat = filterCategory === 'All' || f.category === filterCategory;
+    const matchSearch =
+      searchQuery === '' ||
+      f.filename.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      f.extension.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchCat && matchSearch;
+  });
+
+  const getCategoryIcon = (cat: string) => {
+    switch (cat) {
+      case 'Image': return <ImageIcon className="w-4 h-4 text-emerald-400" />;
+      case 'Document': return <FileText className="w-4 h-4 text-blue-400" />;
+      case 'Video': return <Video className="w-4 h-4 text-purple-400" />;
+      case 'Audio': return <Music className="w-4 h-4 text-amber-400" />;
+      case 'Archive': return <Archive className="w-4 h-4 text-orange-400" />;
+      default: return <FileSearch className="w-4 h-4 text-slate-400" />;
+    }
+  };
+
+  const getIntegrityBadge = (status: string) => {
+    if (status.includes('Likely')) {
+      return <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Likely</span>;
+    }
+    if (status.includes('Partially')) {
+      return <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">Partial</span>;
+    }
+    return <span className="px-2 py-0.5 text-xs rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/30">Corrupted</span>;
+  };
+
+  return (
+    <div className={`h-screen flex flex-col ${theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
+      {/* Top Header */}
+      <header className="h-14 border-b border-slate-800 px-6 flex items-center justify-between bg-slate-900/60 backdrop-blur select-none">
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setCurrentStep(0)}>
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-lg shadow-sky-500/20">
+            Re
+          </div>
+          <div>
+            <div className="font-semibold text-base tracking-wide flex items-center gap-2">
+              OpenRe
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.0</span>
+            </div>
+            <div className="text-[11px] text-slate-400">Professional File Recovery</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>100% Offline & Private</span>
+          </div>
+
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
+            title="Toggle theme"
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+
+          <button
+            onClick={() => setShowSettings(true)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
+            title="Settings"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={() => setShowAbout(true)}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
+            title="About OpenRe"
+          >
+            <Info className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main className="flex-1 overflow-hidden flex flex-col p-6">
+        {/* Step Indicator Bar when in workflow */}
+        {currentStep > 0 && (
+          <div className="mb-6 flex items-center justify-between border-b border-slate-800 pb-4">
+            <div className="flex items-center gap-2">
+              {['Source', 'Method', 'Filters', 'Scan', 'Review', 'Recover', 'Report'].map((label, idx) => {
+                const stepNum = idx + 1;
+                const isCurrent = currentStep === stepNum;
+                const isPassed = currentStep > stepNum;
+                return (
+                  <div key={label} className="flex items-center">
+                    <div
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                        isCurrent
+                          ? 'bg-sky-500 text-white shadow-md shadow-sky-500/25'
+                          : isPassed
+                          ? 'bg-slate-800 text-slate-300'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      <span>{stepNum}</span>
+                      <span>{label}</span>
+                    </div>
+                    {idx < 6 && <div className="w-4 h-[1px] bg-slate-800 mx-1" />}
+                  </div>
+                );
+              })}
+            </div>
+
+            {currentStep < 4 && (
+              <button
+                onClick={() => setCurrentStep(0)}
+                className="text-xs text-slate-400 hover:text-slate-200 transition"
+              >
+                Cancel to Dashboard
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* STEP 0: Initial Screen / Dashboard */}
+        {currentStep === 0 && (
+          <div className="flex-1 flex flex-col items-center justify-center max-w-4xl mx-auto w-full">
+            <div className="text-center mb-10">
+              <h1 className="text-3xl font-bold tracking-tight mb-2">Recover Your Lost Files Safely</h1>
+              <p className="text-slate-400 max-w-xl mx-auto text-sm">
+                OpenRe performs high-performance deep sector carving and filesystem undeletion with guaranteed offline privacy.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4 w-full mb-8">
+              <div
+                onClick={() => { setScanMode('quick'); setCurrentStep(1); }}
+                className="p-5 rounded-xl border border-slate-800 bg-slate-900/50 hover:border-sky-500/50 hover:bg-slate-800/50 cursor-pointer transition flex flex-col group shadow-sm"
+              >
+                <div className="w-10 h-10 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center mb-4 group-hover:scale-110 transition">
+                  <FileSearch className="w-5 h-5" />
+                </div>
+                <h3 className="font-semibold text-base mb-1">Recover Files</h3>
+                <p className="text-xs text-slate-400 mb-4 flex-1">
+                  Step-by-step guided recovery wizard for deleted files, pictures, and documents.
+                </p>
+                <div className="text-xs font-medium text-sky-400 flex items-center gap-1">
+                  Start Wizard <ArrowRight className="w-3.5 h-3.5" />
+                </div>
+              </div>
+
+              <div
+                onClick={() => { setScanMode('deep'); setCurrentStep(1); }}
+                className="p-5 rounded-xl border border-slate-800 bg-slate-900/50 hover:border-indigo-500/50 hover:bg-slate-800/50 cursor-pointer transition flex flex-col group shadow-sm"
+              >
+                <div className="w-10 h-10 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center mb-4 group-hover:scale-110 transition">
+                  <HardDrive className="w-5 h-5" />
+                </div>
+                <h3 className="font-semibold text-base mb-1">Scan a Drive</h3>
+                <p className="text-xs text-slate-400 mb-4 flex-1">
+                  Deep block-strided signature carving across damaged, unpartitioned, or formatted disks.
+                </p>
+                <div className="text-xs font-medium text-indigo-400 flex items-center gap-1">
+                  Select Drive <ArrowRight className="w-3.5 h-3.5" />
+                </div>
+              </div>
+
+              <div
+                onClick={async () => {
+                  const img = await sendIpc('select_image_file');
+                  if (img) {
+                    setSelectedSource({
+                      id: img,
+                      name: `Disk Image (${img.split(/[\\/]/).pop()})`,
+                      device_type: 'DiskImage',
+                      size_bytes: 0,
+                      is_read_only: true,
+                      requires_elevation: false,
+                    });
+                    setScanMode('deep');
+                    setCurrentStep(2);
+                  }
+                }}
+                className="p-5 rounded-xl border border-slate-800 bg-slate-900/50 hover:border-emerald-500/50 hover:bg-slate-800/50 cursor-pointer transition flex flex-col group shadow-sm"
+              >
+                <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center mb-4 group-hover:scale-110 transition">
+                  <FolderOpen className="w-5 h-5" />
+                </div>
+                <h3 className="font-semibold text-base mb-1">Scan a Disk Image</h3>
+                <p className="text-xs text-slate-400 mb-4 flex-1">
+                  Load raw image dumps (.img, .dd, .raw) safely without accessing the physical media repeatedly.
+                </p>
+                <div className="text-xs font-medium text-emerald-400 flex items-center gap-1">
+                  Browse Image <ArrowRight className="w-3.5 h-3.5" />
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Status Pill */}
+            <div className="text-xs text-slate-500 flex items-center gap-6">
+              <span>✓ NTFS / FAT32 / exFAT / ext4</span>
+              <span>✓ 15+ Format-Aware Carvers</span>
+              <span>✓ Pre-Recovery Hex/Image Sandbox Preview</span>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 1: Select Source */}
+        {currentStep === 1 && (
+          <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
+            <h2 className="text-xl font-bold mb-1">Step 1 — Select Storage Media</h2>
+            <p className="text-xs text-slate-400 mb-6">Choose the partition, drive, or disk image containing your deleted data.</p>
+
+            <div className="flex-1 overflow-y-auto pr-2 space-y-2 mb-6">
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Logical Volumes & Drives</div>
+              {devices.filter((d) => d.device_type === 'Volume').map((dev) => (
+                <div
+                  key={dev.id}
+                  onClick={() => setSelectedSource(dev)}
+                  className={`p-3.5 rounded-lg border flex items-center justify-between cursor-pointer transition ${
+                    selectedSource?.id === dev.id
+                      ? 'border-sky-500 bg-sky-500/10'
+                      : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <HardDrive className={`w-5 h-5 ${selectedSource?.id === dev.id ? 'text-sky-400' : 'text-slate-400'}`} />
+                    <div>
+                      <div className="font-medium text-sm">{dev.name}</div>
+                      <div className="text-xs text-slate-400">{dev.mount_point || dev.id}</div>
+                    </div>
+                  </div>
+                  <div className="text-xs font-mono text-slate-400">
+                    {dev.size_bytes > 0 ? `${(dev.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB` : 'Available'}
+                  </div>
+                </div>
+              ))}
+
+              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mt-6 mb-2">Physical Devices & Raw Media</div>
+              {devices.filter((d) => d.device_type === 'PhysicalDrive').map((dev) => (
+                <div
+                  key={dev.id}
+                  onClick={() => setSelectedSource(dev)}
+                  className={`p-3.5 rounded-lg border flex items-center justify-between cursor-pointer transition ${
+                    selectedSource?.id === dev.id
+                      ? 'border-sky-500 bg-sky-500/10'
+                      : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <HardDrive className="w-5 h-5 text-indigo-400" />
+                    <div>
+                      <div className="font-medium text-sm">{dev.name}</div>
+                      <div className="text-xs text-slate-400">{dev.id}</div>
+                    </div>
+                  </div>
+                  <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                    Requires Admin Elevation
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+              <button
+                onClick={() => setCurrentStep(0)}
+                className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
+              >
+                Back
+              </button>
+              <button
+                disabled={!selectedSource}
+                onClick={() => setCurrentStep(2)}
+                className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
+              >
+                Continue to Recovery Method <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 2: Select Method */}
+        {currentStep === 2 && (
+          <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
+            <h2 className="text-xl font-bold mb-1">Step 2 — Select Recovery Method</h2>
+            <p className="text-xs text-slate-400 mb-6">Choose how OpenRe should analyze the selected media.</p>
+
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <div
+                onClick={() => setScanMode('quick')}
+                className={`p-5 rounded-xl border cursor-pointer transition flex flex-col ${
+                  scanMode === 'quick'
+                    ? 'border-sky-500 bg-sky-500/10'
+                    : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center mb-3">
+                  <FileSearch className="w-4 h-4" />
+                </div>
+                <h3 className="font-semibold text-sm mb-1">Quick Scan (Filesystem Undelete)</h3>
+                <p className="text-xs text-slate-400 mb-4 flex-1">
+                  Fastest option. Inspects NTFS ($MFT), FAT32, exFAT, and ext4 directory metadata to recover recently deleted files with original filenames, timestamps, and directories intact.
+                </p>
+                <div className="text-xs text-emerald-400 font-medium">✓ Preserves original file names & paths</div>
+              </div>
+
+              <div
+                onClick={() => setScanMode('deep')}
+                className={`p-5 rounded-xl border cursor-pointer transition flex flex-col ${
+                  scanMode === 'deep'
+                    ? 'border-indigo-500 bg-indigo-500/10'
+                    : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center mb-3">
+                  <HardDrive className="w-4 h-4" />
+                </div>
+                <h3 className="font-semibold text-sm mb-1">Deep Scan (Signature Carving)</h3>
+                <p className="text-xs text-slate-400 mb-4 flex-1">
+                  Examines raw sector blocks across the entire device. Detects file headers and chunk boundaries (JPEG, PNG, PDF, DOCX, ZIP, MP4) even on formatted or corrupted drives.
+                </p>
+                <div className="text-xs text-indigo-400 font-medium">✓ Works on formatted or RAW partitions</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+              <button
+                onClick={() => setCurrentStep(1)}
+                className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
+              >
+                Back
+              </button>
+              <button
+                onClick={() => setCurrentStep(3)}
+                className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
+              >
+                Continue to Filters <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3: Apply Filters */}
+        {currentStep === 3 && (
+          <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
+            <h2 className="text-xl font-bold mb-1">Step 3 — Apply Search Filters</h2>
+            <p className="text-xs text-slate-400 mb-6">Select which file types you are looking to recover.</p>
+
+            <div className="grid grid-cols-3 gap-3 mb-8">
+              {[
+                { label: 'Images', ext: 'JPG, PNG, GIF, WebP, BMP', key: 'Image', icon: ImageIcon },
+                { label: 'Documents', ext: 'PDF, DOCX, XLSX, PPTX', key: 'Document', icon: FileText },
+                { label: 'Videos', ext: 'MP4, MKV, MOV, AVI', key: 'Video', icon: Video },
+                { label: 'Audio', ext: 'MP3, WAV, FLAC', key: 'Audio', icon: Music },
+                { label: 'Archives', ext: 'ZIP, RAR, 7Z, TAR', key: 'Archive', icon: Archive },
+                { label: 'Code & Text', ext: 'TXT, JSON, MD, LOG', key: 'Text', icon: FileSearch },
+              ].map((item) => {
+                const isSelected = selectedCategories.includes(item.key);
+                const Icon = item.icon;
+                return (
+                  <div
+                    key={item.key}
+                    onClick={() => {
+                      if (isSelected) {
+                        setSelectedCategories(selectedCategories.filter((c) => c !== item.key));
+                      } else {
+                        setSelectedCategories([...selectedCategories, item.key]);
+                      }
+                    }}
+                    className={`p-4 rounded-lg border cursor-pointer transition flex items-center gap-3 ${
+                      isSelected
+                        ? 'border-sky-500 bg-sky-500/10 text-sky-200'
+                        : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    <Icon className="w-5 h-5 text-sky-400" />
+                    <div>
+                      <div className="font-medium text-sm">{item.label}</div>
+                      <div className="text-[11px] text-slate-500">{item.ext}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+              <button
+                onClick={() => setCurrentStep(2)}
+                className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleStartScan}
+                className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition flex items-center gap-2"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" /> Start Scan Now
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 4: Scanning Screen */}
+        {currentStep === 4 && (
+          <div className="flex-1 flex flex-col items-center justify-center max-w-2xl mx-auto w-full">
+            <div className="w-16 h-16 rounded-full bg-sky-500/10 text-sky-400 flex items-center justify-center mb-6 animate-pulse">
+              <FileSearch className="w-8 h-8" />
+            </div>
+
+            <h2 className="text-2xl font-bold mb-2">Scanning in Progress</h2>
+            <p className="text-xs text-slate-400 mb-8">{scanProgress.currentLabel}</p>
+
+            {/* Progress Bar */}
+            <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden mb-4">
+              <div
+                className="bg-gradient-to-r from-sky-500 to-indigo-500 h-full transition-all duration-300 ease-out"
+                style={{ width: `${scanProgress.percent}%` }}
+              />
+            </div>
+
+            <div className="w-full flex items-center justify-between text-xs text-slate-400 font-mono mb-8">
+              <span>{scanProgress.percent}%</span>
+              <span>Speed: {scanProgress.speedMBps} MB/s</span>
+              <span>Files Discovered: {scanProgress.filesCount}</span>
+            </div>
+
+            <button
+              onClick={handleCancelScan}
+              className="px-5 py-2 rounded-lg border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition flex items-center gap-2"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" /> Stop Scan
+            </button>
+          </div>
+        )}
+
+        {/* STEP 5: Review Results & Previews */}
+        {currentStep === 5 && (
+          <div className="flex-1 flex flex-col h-full overflow-hidden">
+            {/* Toolbar */}
+            <div className="flex items-center justify-between gap-4 mb-4 pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Filter by name or extension..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 w-64"
+                />
+
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
+                >
+                  <option value="All">All Categories</option>
+                  <option value="Image">Images</option>
+                  <option value="Document">Documents</option>
+                  <option value="Video">Videos</option>
+                  <option value="Audio">Audio</option>
+                  <option value="Archive">Archives</option>
+                  <option value="Text">Text</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="text-xs text-slate-400">
+                  {selectedFileIds.size} of {filteredFiles.length} selected
+                </div>
+
+                <div className="flex items-center border border-slate-800 rounded-lg overflow-hidden">
+                  <button
+                    onClick={() => setViewMode('list')}
+                    className={`p-1.5 ${viewMode === 'list' ? 'bg-slate-800 text-sky-400' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setViewMode('grid')}
+                    className={`p-1.5 ${viewMode === 'grid' ? 'bg-slate-800 text-sky-400' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => setCurrentStep(6)}
+                  disabled={selectedFileIds.size === 0}
+                  className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
+                >
+                  Proceed to Recover ({selectedFileIds.size}) <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* File List / Grid */}
+            <div className="flex-1 overflow-y-auto pr-1">
+              {viewMode === 'list' ? (
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-900 text-slate-400 font-semibold border-b border-slate-800">
+                    <tr>
+                      <th className="py-2 px-3 w-8">
+                        <input
+                          type="checkbox"
+                          checked={selectedFileIds.size === filteredFiles.length && filteredFiles.length > 0}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedFileIds(new Set(filteredFiles.map((f) => f.id)));
+                            } else {
+                              setSelectedFileIds(new Set());
+                            }
+                          }}
+                        />
+                      </th>
+                      <th className="py-2 px-3">Filename</th>
+                      <th className="py-2 px-3">Category</th>
+                      <th className="py-2 px-3">Size</th>
+                      <th className="py-2 px-3">Integrity Rating</th>
+                      <th className="py-2 px-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-850">
+                    {filteredFiles.map((file) => (
+                      <tr key={file.id} className="hover:bg-slate-900/60 transition group">
+                        <td className="py-2 px-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedFileIds.has(file.id)}
+                            onChange={(e) => {
+                              const next = new Set(selectedFileIds);
+                              if (e.target.checked) next.add(file.id);
+                              else next.delete(file.id);
+                              setSelectedFileIds(next);
+                            }}
+                          />
+                        </td>
+                        <td className="py-2 px-3 flex items-center gap-2 font-mono">
+                          {getCategoryIcon(file.category)}
+                          <span className="font-medium text-slate-200">{file.filename}</span>
+                        </td>
+                        <td className="py-2 px-3 text-slate-400">{file.category}</td>
+                        <td className="py-2 px-3 text-slate-400 font-mono">
+                          {(file.size_bytes / 1024).toFixed(1)} KB
+                        </td>
+                        <td className="py-2 px-3">{getIntegrityBadge(file.integrity)}</td>
+                        <td className="py-2 px-3 text-right">
+                          <button
+                            onClick={() => openPreview(file)}
+                            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition inline-flex items-center gap-1"
+                          >
+                            <Eye className="w-3.5 h-3.5" /> Preview
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="grid grid-cols-4 gap-3">
+                  {filteredFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      onClick={() => openPreview(file)}
+                      className="p-3 rounded-lg border border-slate-800 bg-slate-900/40 hover:border-slate-700 cursor-pointer transition flex flex-col justify-between"
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        {getCategoryIcon(file.category)}
+                        {getIntegrityBadge(file.integrity)}
+                      </div>
+                      <div className="font-mono text-xs font-medium truncate text-slate-200 mb-1">{file.filename}</div>
+                      <div className="text-[11px] text-slate-500 font-mono">{(file.size_bytes / 1024).toFixed(1)} KB</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* STEP 6: Recover Destination */}
+        {currentStep === 6 && (
+          <div className="flex-1 flex flex-col max-w-2xl mx-auto w-full justify-center">
+            <h2 className="text-2xl font-bold mb-2">Step 6 — Choose Destination Directory</h2>
+            <p className="text-xs text-slate-400 mb-6">Select a safe location to write the recovered files.</p>
+
+            {/* Target Path Box */}
+            <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60 mb-4">
+              <label className="text-xs font-semibold text-slate-300 block mb-2">Recovery Target Directory:</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  placeholder="Click Browse to choose destination..."
+                  value={destPath}
+                  className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono focus:outline-none"
+                />
+                <button
+                  onClick={handleSelectDestFolder}
+                  className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1.5"
+                >
+                  <FolderOpen className="w-4 h-4" /> Browse
+                </button>
+              </div>
+            </div>
+
+            {/* Collision Warning Banner */}
+            {collisionWarning ? (
+              <div className="p-4 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs flex items-start gap-3 mb-6">
+                <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-semibold mb-1">Overwriting Risk Detected!</div>
+                  <div>{collisionWarning}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-lg border border-slate-800 bg-slate-900/40 text-slate-400 text-xs flex items-center gap-2 mb-6">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Files will be written with SHA-256 validation. Existing files are never overwritten.</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+              <button
+                onClick={() => setCurrentStep(5)}
+                className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
+              >
+                Back to Results
+              </button>
+              <button
+                disabled={!destPath || !!collisionWarning || isRecovering}
+                onClick={handleStartRecovery}
+                className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition flex items-center gap-2"
+              >
+                <Download className="w-4 h-4" /> Start Recovery Process
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 7: Audit Report Screen */}
+        {currentStep === 7 && (
+          <div className="flex-1 flex flex-col max-w-3xl mx-auto w-full">
+            <div className="text-center mb-6">
+              <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <h2 className="text-2xl font-bold">Recovery Completed Successfully</h2>
+              <p className="text-xs text-slate-400">All chosen files have been written to the destination directory.</p>
+            </div>
+
+            <div className="flex-1 bg-slate-900 rounded-xl border border-slate-800 p-4 font-mono text-xs overflow-y-auto mb-6 whitespace-pre-wrap text-slate-300">
+              {recoveryReportMd}
+            </div>
+
+            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+              <button
+                onClick={() => setCurrentStep(0)}
+                className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition flex items-center gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Start New Recovery
+              </button>
+
+              <button
+                onClick={() => sendIpc('open_output_folder', { path: destPath })}
+                className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
+              >
+                <FolderOpen className="w-4 h-4" /> Open Destination Folder
+              </button>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Slide-out Preview Drawer */}
+      {previewFile && (
+        <div className="fixed inset-y-0 right-0 w-[480px] bg-slate-900 border-l border-slate-800 shadow-2xl flex flex-col z-50">
+          <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+            <div className="font-semibold text-sm flex items-center gap-2 truncate">
+              {getCategoryIcon(previewFile.category)}
+              <span className="truncate">{previewFile.filename}</span>
+            </div>
+            <button
+              onClick={() => { setPreviewFile(null); setPreviewData(null); }}
+              className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {/* Visual Thumbnail */}
+            {previewData?.thumbnail_base64 && (
+              <div className="border border-slate-800 rounded-xl p-3 bg-slate-950 flex flex-col items-center">
+                <img
+                  src={previewData.thumbnail_base64}
+                  alt="Recovered Thumbnail"
+                  className="max-h-48 object-contain rounded-lg"
+                />
+                {previewData.dimensions && (
+                  <div className="text-[11px] text-slate-400 mt-2">
+                    {previewData.dimensions[0]} × {previewData.dimensions[1]} pixels
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Repair Banner if corrupt/truncated image */}
+            {(previewFile.extension === 'jpg' || previewFile.extension === 'png') && (
+              <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-xs text-indigo-300">Non-Destructive Image Repair</div>
+                  <div className="text-[11px] text-slate-400">Reconstruct missing markers and recalculate chunk CRCs.</div>
+                </div>
+                <button
+                  onClick={handleRepairCopy}
+                  className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1"
+                >
+                  <Wrench className="w-3.5 h-3.5" /> Repair Copy
+                </button>
+              </div>
+            )}
+
+            {repairReport && (
+              <div className="p-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-300">
+                <div className="font-semibold mb-1">Repair Applied:</div>
+                {repairReport.fixes_applied.map((f, i) => (
+                  <div key={i}>• {f}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Metadata Entries */}
+            <div className="border border-slate-800 rounded-lg p-3 bg-slate-950/50">
+              <div className="text-xs font-semibold text-slate-400 mb-2">Metadata & Allocation:</div>
+              <div className="space-y-1 text-xs">
+                <div className="flex justify-between text-slate-400">
+                  <span>File Size:</span>
+                  <span className="font-mono text-slate-200">{previewFile.size_bytes} bytes</span>
+                </div>
+                <div className="flex justify-between text-slate-400">
+                  <span>Source Offset:</span>
+                  <span className="font-mono text-slate-200">0x{previewFile.source_offset.toString(16).toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between text-slate-400">
+                  <span>Integrity:</span>
+                  <span>{getIntegrityBadge(previewFile.integrity)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Hex Dump Section */}
+            {previewData?.hex_dump && previewData.hex_dump.length > 0 && (
+              <div className="border border-slate-800 rounded-lg p-3 bg-slate-950 font-mono text-[11px] overflow-x-auto">
+                <div className="text-slate-400 font-semibold mb-2">Raw Sector Dump (First 512 bytes):</div>
+                {previewData.hex_dump.map((line, idx) => (
+                  <div key={idx} className="flex gap-2 text-slate-300">
+                    <span className="text-slate-500">{line.offset}</span>
+                    <span className="text-sky-300">{line.hex}</span>
+                    <span className="text-slate-400">|{line.ascii}|</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* About Modal */}
+      {showAbout && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-sky-600 flex items-center justify-center font-bold text-white">Re</div>
+                <h3 className="font-bold text-base">About OpenRe</h3>
+              </div>
+              <button onClick={() => setShowAbout(false)} className="text-slate-400 hover:text-slate-100">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+              OpenRe is an open-source, privacy-first desktop application for deleted file recovery, disk carving, and forensic file inspection.
+            </p>
+            <div className="text-xs space-y-2 border-t border-slate-800 pt-4 text-slate-300">
+              <div><strong>License:</strong> MIT Open Source</div>
+              <div><strong>Core Engine:</strong> Rust 2021 (Memory-Safe)</div>
+              <div><strong>Privacy:</strong> 100% Offline (Zero telemetry)</div>
+              <div><strong>Portuguese Guide:</strong> docs/installation/INSTALLATION_PT_BR.md</div>
+            </div>
+            <button
+              onClick={() => setShowAbout(false)}
+              className="mt-6 w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,13 @@
+[package]
+name = "reporting"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Local recovery audit reporting (JSON, Markdown, CSV) for OpenRe"
+
+[dependencies]
+recovery-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

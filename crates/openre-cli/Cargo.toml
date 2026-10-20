@@ -1,0 +1,22 @@
+[package]
+name = "openre-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Command-line diagnostic and automated recovery tool for OpenRe"
+
+[[bin]]
+name = "openre-cli"
+path = "src/main.rs"
+
+[dependencies]
+recovery-core = { workspace = true }
+device-access = { workspace = true }
+filesystem = { workspace = true }
+file-carving = { workspace = true }
+file-preview = { workspace = true }
+image-repair = { workspace = true }
+reporting = { workspace = true }
+scanner = { workspace = true }
+clap = { workspace = true }

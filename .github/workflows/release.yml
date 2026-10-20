@@ -1,0 +1,120 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Portable
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build Application
+        run: cargo build --release --workspace
+
+      - name: Package Windows Portable ZIP
+        shell: pwsh
+        run: |
+          $pkgDir = "OpenRe-Windows-x64-Portable"
+          New-Item -ItemType Directory -Path $pkgDir
+          Copy-Item "target/release/openre-cli.exe" -Destination "$pkgDir/OpenRe.exe"
+          Copy-Item "README.md" -Destination "$pkgDir/README.txt"
+          Copy-Item "LICENSE" -Destination "$pkgDir/LICENSE"
+          New-Item -ItemType Directory -Path "$pkgDir/docs"
+          Copy-Item "docs/installation/INSTALLATION_EN.md" -Destination "$pkgDir/docs/"
+          Copy-Item "docs/installation/INSTALLATION_PT_BR.md" -Destination "$pkgDir/docs/"
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath "OpenRe-Windows-x64-Portable.zip"
+          Get-FileHash -Algorithm SHA256 "OpenRe-Windows-x64-Portable.zip" | Out-File "OpenRe-Windows-x64-Portable.zip.sha256"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: |
+            OpenRe-Windows-x64-Portable.zip
+            OpenRe-Windows-x64-Portable.zip.sha256
+
+  build-ubuntu:
+    name: Build Ubuntu .deb
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev dpkg-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build Application
+        run: cargo build --release --workspace
+
+      - name: Build Debian Package
+        run: |
+          chmod +x scripts/build_deb.sh
+          ./scripts/build_deb.sh
+          sha256sum openre_amd64.deb > openre_amd64.deb.sha256
+
+      - name: Upload Debian Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-deb
+          path: |
+            openre_amd64.deb
+            openre_amd64.deb.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-ubuntu]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate Consolidated Checksums
+        run: |
+          mkdir release_assets
+          cp windows-portable/* release_assets/
+          cp ubuntu-deb/* release_assets/
+          cd release_assets
+          sha256sum OpenRe-Windows-x64-Portable.zip openre_amd64.deb > SHA256SUMS.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

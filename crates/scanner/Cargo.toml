@@ -1,0 +1,21 @@
+[package]
+name = "scanner"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Quick scan (filesystem analysis) and Deep scan (block carving) engine for OpenRe"
+
+[dependencies]
+recovery-core = { workspace = true }
+device-access = { workspace = true }
+filesystem = { workspace = true }
+file-carving = { workspace = true }
+reporting = { workspace = true }
+sha2 = { workspace = true }
+rayon = { workspace = true }
+walkdir = { workspace = true }
+
+[dev-dependencies]
+file-preview = { workspace = true }
+image-repair = { workspace = true }

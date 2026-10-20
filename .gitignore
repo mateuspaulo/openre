@@ -1,0 +1,83 @@
+# Release bundles and binary archives
+release/*.zip
+release/*.exe
+release/OpenRe-Windows-x64-Portable/
+!release/SHA256SUMS.txt
+!release/*.sha256
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock.backup
+
+# Node / Frontend artifacts
+node_modules/
+dist/
+dist-ssr/
+*.local
+.npm/
+
+# Tauri build artifacts
+src-tauri/target/
+src-tauri/gen/
+
+# Sensitive data and real disk images (NEVER COMMIT REAL USER DATA)
+*.img
+*.dd
+*.raw
+*.vhd
+*.vhdx
+*.vmdk
+*.iso
+*.bin
+*.dmp
+*.dump
+
+# Local test outputs and recovered files
+recovered/
+test_output/
+recovery_output/
+*.recovered
+*.repaired
+
+# Credentials, secrets, environment variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+id_rsa
+id_ecdsa
+id_ed25519
+*.secret
+
+# IDE and Editor configurations
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and runtime caches
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-debug.log*
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal

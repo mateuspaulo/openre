@@ -1,0 +1,13 @@
+[package]
+name = "file-preview"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Untrusted sandbox preview generator (thumbnails, hex dumps, metadata) for OpenRe"
+
+[dependencies]
+recovery-core = { workspace = true }
+image = { workspace = true }
+base64 = { workspace = true }
+serde = { workspace = true }

@@ -1,0 +1,11 @@
+[package]
+name = "filesystem"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Forensic filesystem analysis and deleted record extraction for NTFS, FAT32, exFAT, and ext4"
+
+[dependencies]
+recovery-core = { workspace = true }
+byteorder = { workspace = true }

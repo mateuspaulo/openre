@@ -1,0 +1,12 @@
+[package]
+name = "file-carving"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Signature-based and format-aware file carvers for OpenRe"
+
+[dependencies]
+recovery-core = { workspace = true }
+crc32fast = { workspace = true }
+byteorder = { workspace = true }

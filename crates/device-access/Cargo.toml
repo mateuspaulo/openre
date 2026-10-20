@@ -1,0 +1,10 @@
+[package]
+name = "device-access"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Cross-platform read-only device access, disk imaging, and device enumeration for OpenRe"
+
+[dependencies]
+recovery-core = { workspace = true }

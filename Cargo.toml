@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "crates/recovery-core",
+    "crates/device-access",
+    "crates/filesystem",
+    "crates/file-carving",
+    "crates/file-preview",
+    "crates/image-repair",
+    "crates/reporting",
+    "crates/scanner",
+    "crates/openre-cli",
+    "src-tauri",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["OpenRe Maintainers <maintainers@openre.org>"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/openre/openre"
+homepage = "https://github.com/openre/openre"
+description = "Professional, Open-Source, Privacy-First File Recovery Software"
+
+[workspace.dependencies]
+recovery-core = { path = "crates/recovery-core" }
+device-access = { path = "crates/device-access" }
+filesystem = { path = "crates/filesystem" }
+file-carving = { path = "crates/file-carving" }
+file-preview = { path = "crates/file-preview" }
+image-repair = { path = "crates/image-repair" }
+reporting = { path = "crates/reporting" }
+scanner = { path = "crates/scanner" }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+sha2 = "0.10"
+crc32fast = "1.4"
+byteorder = "1.5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rayon = "1.10"
+walkdir = "2.5"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
