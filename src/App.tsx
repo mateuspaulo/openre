@@ -26,6 +26,10 @@ import {
   Square,
   LayoutGrid,
   List,
+  Check,
+  Sliders,
+  FolderCheck,
+  Database,
 } from 'lucide-react';
 
 interface DeviceInfo {
@@ -80,6 +84,7 @@ interface RepairReport {
 
 export default function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [language, setLanguage] = useState<'en' | 'pt'>('en');
   const [currentStep, setCurrentStep] = useState<number>(0); // 0 = Dashboard, 1..7 = Workflow
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedSource, setSelectedSource] = useState<DeviceInfo | null>(null);
@@ -87,6 +92,12 @@ export default function App() {
   const [selectedCategories, setSelectedCategories] = useState<string[]>([
     'Image', 'Document', 'Video', 'Audio', 'Archive', 'Text', 'Other'
   ]);
+
+  // Engine Settings
+  const [scanStride, setScanStride] = useState<number>(512);
+  const [enforceSeparation, setEnforceSeparation] = useState<boolean>(true);
+  const [autoRepairMarkers, setAutoRepairMarkers] = useState<boolean>(true);
+  const [maxBufferSizeMb, setMaxBufferSizeMb] = useState<number>(128);
 
   // Scan state
   const [isScanning, setIsScanning] = useState(false);
@@ -137,7 +148,6 @@ export default function App() {
       if ((window as any).ipc) {
         (window as any).ipc.postMessage(JSON.stringify({ cmd, msgId, payload }));
       } else {
-        // Fallback for browser preview / testing
         simulateIpc(cmd, payload, resolve);
       }
     });
@@ -149,7 +159,9 @@ export default function App() {
         { id: 'C:', name: 'Local Disk (C:)', device_type: 'Volume', size_bytes: 512110190592, is_read_only: false, requires_elevation: false },
         { id: 'D:', name: 'Data Drive (D:)', device_type: 'Volume', size_bytes: 1000204886016, is_read_only: false, requires_elevation: false },
         { id: 'E:', name: 'USB Flash Drive (E:)', device_type: 'Volume', size_bytes: 32000000000, is_read_only: false, requires_elevation: false },
+        { id: 'I:', name: 'Backup Drive (I:)', device_type: 'Volume', size_bytes: 2000000000000, is_read_only: false, requires_elevation: false },
         { id: '\\\\.\\PhysicalDrive0', name: 'Physical Drive 0 (NVMe SSD)', device_type: 'PhysicalDrive', size_bytes: 512110190592, is_read_only: false, requires_elevation: true },
+        { id: '\\\\.\\PhysicalDrive1', name: 'Physical Drive 1 (SATA HDD)', device_type: 'PhysicalDrive', size_bytes: 1000204886016, is_read_only: false, requires_elevation: true },
       ]);
     } else if (cmd === 'select_folder') {
       resolve('D:\\OpenRe_Recovered_Files');
@@ -165,7 +177,6 @@ export default function App() {
       if (Array.isArray(devs)) setDevices(devs);
     });
 
-    // Listen to real-time events from Rust backend
     const onBackendEvent = (e: any) => {
       const { type, payload } = e.detail || {};
       if (type === 'scan_progress') {
@@ -219,8 +230,7 @@ export default function App() {
     const selected = await sendIpc('select_folder');
     if (selected) {
       setDestPath(selected);
-      // Validate collision
-      if (selectedSource) {
+      if (selectedSource && enforceSeparation) {
         const sourceLetter = selectedSource.id.substring(0, 2).toUpperCase();
         const destLetter = selected.substring(0, 2).toUpperCase();
         if (sourceLetter.endsWith(':') && sourceLetter === destLetter) {
@@ -235,7 +245,7 @@ export default function App() {
   };
 
   const handleStartRecovery = async () => {
-    if (!destPath || collisionWarning) return;
+    if (!destPath || (collisionWarning && enforceSeparation)) return;
     setIsRecovering(true);
     const targetFiles = discoveredFiles.filter((f) => selectedFileIds.has(f.id));
 
@@ -305,9 +315,9 @@ export default function App() {
   };
 
   return (
-    <div className={`h-screen flex flex-col ${theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
+    <div className={`h-screen w-screen overflow-hidden flex flex-col ${theme === 'dark' ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'}`}>
       {/* Top Header */}
-      <header className="h-14 border-b border-slate-800 px-6 flex items-center justify-between bg-slate-900/60 backdrop-blur select-none">
+      <header className="h-14 shrink-0 border-b border-slate-800 px-6 flex items-center justify-between bg-slate-900/60 backdrop-blur select-none">
         <div className="flex items-center gap-3 cursor-pointer" onClick={() => setCurrentStep(0)}>
           <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-600 to-indigo-500 flex items-center justify-center font-bold text-white shadow-lg shadow-sky-500/20">
             Re
@@ -321,7 +331,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs">
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>100% Offline & Private</span>
@@ -337,8 +347,8 @@ export default function App() {
 
           <button
             onClick={() => setShowSettings(true)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
-            title="Settings"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition relative"
+            title="Open Settings"
           >
             <Settings className="w-4 h-4" />
           </button>
@@ -354,10 +364,10 @@ export default function App() {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-hidden flex flex-col p-6">
+      <main className="flex-1 min-h-0 overflow-hidden flex flex-col p-6">
         {/* Step Indicator Bar when in workflow */}
         {currentStep > 0 && (
-          <div className="mb-6 flex items-center justify-between border-b border-slate-800 pb-4">
+          <div className="shrink-0 mb-4 flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2">
               {['Source', 'Method', 'Filters', 'Scan', 'Review', 'Recover', 'Report'].map((label, idx) => {
                 const stepNum = idx + 1;
@@ -366,7 +376,7 @@ export default function App() {
                 return (
                   <div key={label} className="flex items-center">
                     <div
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition ${
+                      className={`flex items-center gap-2 px-3 py-1 rounded-lg text-xs font-medium transition ${
                         isCurrent
                           ? 'bg-sky-500 text-white shadow-md shadow-sky-500/25'
                           : isPassed
@@ -377,7 +387,7 @@ export default function App() {
                       <span>{stepNum}</span>
                       <span>{label}</span>
                     </div>
-                    {idx < 6 && <div className="w-4 h-[1px] bg-slate-800 mx-1" />}
+                    {idx < 6 && <div className="w-3 h-[1px] bg-slate-800 mx-1" />}
                   </div>
                 );
               })}
@@ -396,8 +406,8 @@ export default function App() {
 
         {/* STEP 0: Initial Screen / Dashboard */}
         {currentStep === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center max-w-4xl mx-auto w-full">
-            <div className="text-center mb-10">
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center max-w-4xl mx-auto w-full">
+            <div className="text-center mb-8">
               <h1 className="text-3xl font-bold tracking-tight mb-2">Recover Your Lost Files Safely</h1>
               <p className="text-slate-400 max-w-xl mx-auto text-sm">
                 OpenRe performs high-performance deep sector carving and filesystem undeletion with guaranteed offline privacy.
@@ -468,7 +478,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Quick Status Pill */}
             <div className="text-xs text-slate-500 flex items-center gap-6">
               <span>✓ NTFS / FAT32 / exFAT / ext4</span>
               <span>✓ 15+ Format-Aware Carvers</span>
@@ -477,83 +486,161 @@ export default function App() {
           </div>
         )}
 
-        {/* STEP 1: Select Source */}
+        {/* STEP 1: Select Source (Fixed scrolling & visible footer) */}
         {currentStep === 1 && (
-          <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
-            <h2 className="text-xl font-bold mb-1">Step 1 — Select Storage Media</h2>
-            <p className="text-xs text-slate-400 mb-6">Choose the partition, drive, or disk image containing your deleted data.</p>
+          <div className="flex-1 min-h-0 flex flex-col max-w-4xl mx-auto w-full">
+            <div className="shrink-0 mb-3 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold">Step 1 — Select Storage Media</h2>
+                <p className="text-xs text-slate-400">
+                  Select a drive below, or double-click to proceed directly.
+                </p>
+              </div>
 
-            <div className="flex-1 overflow-y-auto pr-2 space-y-2 mb-6">
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Logical Volumes & Drives</div>
-              {devices.filter((d) => d.device_type === 'Volume').map((dev) => (
-                <div
-                  key={dev.id}
-                  onClick={() => setSelectedSource(dev)}
-                  className={`p-3.5 rounded-lg border flex items-center justify-between cursor-pointer transition ${
-                    selectedSource?.id === dev.id
-                      ? 'border-sky-500 bg-sky-500/10'
-                      : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
-                  }`}
+              {/* Quick browse shortcuts */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={async () => {
+                    const fld = await sendIpc('select_folder');
+                    if (fld) {
+                      setSelectedSource({
+                        id: fld,
+                        name: `Folder (${fld.split(/[\\/]/).pop()})`,
+                        device_type: 'Directory',
+                        size_bytes: 0,
+                        is_read_only: false,
+                        requires_elevation: false,
+                      });
+                      setCurrentStep(2);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-xs text-slate-200 transition flex items-center gap-1.5"
                 >
-                  <div className="flex items-center gap-3">
-                    <HardDrive className={`w-5 h-5 ${selectedSource?.id === dev.id ? 'text-sky-400' : 'text-slate-400'}`} />
-                    <div>
-                      <div className="font-medium text-sm">{dev.name}</div>
-                      <div className="text-xs text-slate-400">{dev.mount_point || dev.id}</div>
-                    </div>
-                  </div>
-                  <div className="text-xs font-mono text-slate-400">
-                    {dev.size_bytes > 0 ? `${(dev.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB` : 'Available'}
-                  </div>
-                </div>
-              ))}
+                  <FolderOpen className="w-3.5 h-3.5 text-sky-400" /> Browse Folder...
+                </button>
 
-              <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mt-6 mb-2">Physical Devices & Raw Media</div>
-              {devices.filter((d) => d.device_type === 'PhysicalDrive').map((dev) => (
-                <div
-                  key={dev.id}
-                  onClick={() => setSelectedSource(dev)}
-                  className={`p-3.5 rounded-lg border flex items-center justify-between cursor-pointer transition ${
-                    selectedSource?.id === dev.id
-                      ? 'border-sky-500 bg-sky-500/10'
-                      : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
-                  }`}
+                <button
+                  onClick={async () => {
+                    const img = await sendIpc('select_image_file');
+                    if (img) {
+                      setSelectedSource({
+                        id: img,
+                        name: `Disk Image (${img.split(/[\\/]/).pop()})`,
+                        device_type: 'DiskImage',
+                        size_bytes: 0,
+                        is_read_only: true,
+                        requires_elevation: false,
+                      });
+                      setCurrentStep(2);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-xs text-slate-200 transition flex items-center gap-1.5"
                 >
-                  <div className="flex items-center gap-3">
-                    <HardDrive className="w-5 h-5 text-indigo-400" />
-                    <div>
-                      <div className="font-medium text-sm">{dev.name}</div>
-                      <div className="text-xs text-slate-400">{dev.id}</div>
-                    </div>
-                  </div>
-                  <span className="text-[11px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                    Requires Admin Elevation
-                  </span>
-                </div>
-              ))}
+                  <Database className="w-3.5 h-3.5 text-emerald-400" /> Browse Image (.img)...
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+            {/* Scrollable Device List Container with Min-H-0 */}
+            <div className="flex-1 min-h-0 overflow-y-auto pr-3 space-y-2 border border-slate-800/80 rounded-xl p-3 bg-slate-950/40">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1 flex items-center justify-between">
+                <span>Logical Partitions & Volumes</span>
+                <span className="text-slate-500 text-[10px]">Click to select, double-click to advance</span>
+              </div>
+              {devices.filter((d) => d.device_type === 'Volume').map((dev) => {
+                const isSelected = selectedSource?.id === dev.id;
+                return (
+                  <div
+                    key={dev.id}
+                    onClick={() => setSelectedSource(dev)}
+                    onDoubleClick={() => { setSelectedSource(dev); setCurrentStep(2); }}
+                    className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition select-none ${
+                      isSelected
+                        ? 'border-sky-500 bg-sky-500/15 ring-2 ring-sky-500/30'
+                        : 'border-slate-800/80 bg-slate-900/40 hover:border-slate-700 hover:bg-slate-900/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <HardDrive className={`w-5 h-5 ${isSelected ? 'text-sky-400' : 'text-slate-400'}`} />
+                      <div>
+                        <div className="font-semibold text-sm text-slate-200 flex items-center gap-2">
+                          {dev.name}
+                          {isSelected && <Check className="w-4 h-4 text-sky-400" />}
+                        </div>
+                        <div className="text-xs text-slate-400">{dev.mount_point || dev.id}</div>
+                      </div>
+                    </div>
+                    <div className="text-xs font-mono text-slate-300">
+                      {dev.size_bytes > 0 ? `${(dev.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB` : 'Available'}
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-5 mb-1">Physical Hard Drives & SSDs</div>
+              {devices.filter((d) => d.device_type === 'PhysicalDrive').map((dev) => {
+                const isSelected = selectedSource?.id === dev.id;
+                return (
+                  <div
+                    key={dev.id}
+                    onClick={() => setSelectedSource(dev)}
+                    onDoubleClick={() => { setSelectedSource(dev); setCurrentStep(2); }}
+                    className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition select-none ${
+                      isSelected
+                        ? 'border-indigo-500 bg-indigo-500/15 ring-2 ring-indigo-500/30'
+                        : 'border-slate-800/80 bg-slate-900/40 hover:border-slate-700 hover:bg-slate-900/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <HardDrive className="w-5 h-5 text-indigo-400" />
+                      <div>
+                        <div className="font-semibold text-sm text-slate-200 flex items-center gap-2">
+                          {dev.name}
+                          {isSelected && <Check className="w-4 h-4 text-indigo-400" />}
+                        </div>
+                        <div className="text-xs text-slate-400">{dev.id}</div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                      Admin Elevation
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Pinned Sticky Footer - ALWAYS VISIBLE */}
+            <div className="shrink-0 pt-3 border-t border-slate-800 flex items-center justify-between bg-slate-950/60 backdrop-blur">
               <button
                 onClick={() => setCurrentStep(0)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
               >
-                Back
+                Back to Dashboard
               </button>
-              <button
-                disabled={!selectedSource}
-                onClick={() => setCurrentStep(2)}
-                className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
-              >
-                Continue to Recovery Method <ArrowRight className="w-3.5 h-3.5" />
-              </button>
+
+              <div className="flex items-center gap-4">
+                <span className="text-xs text-slate-400">
+                  {selectedSource ? (
+                    <span className="text-slate-200 font-medium">Selected: <strong>{selectedSource.name}</strong></span>
+                  ) : (
+                    'Select a drive to proceed'
+                  )}
+                </span>
+                <button
+                  disabled={!selectedSource}
+                  onClick={() => setCurrentStep(2)}
+                  className="px-6 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-2"
+                >
+                  Continue to Recovery Method <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         )}
 
         {/* STEP 2: Select Method */}
         {currentStep === 2 && (
-          <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
+          <div className="flex-1 min-h-0 flex flex-col max-w-4xl mx-auto w-full">
             <h2 className="text-xl font-bold mb-1">Step 2 — Select Recovery Method</h2>
             <p className="text-xs text-slate-400 mb-6">Choose how OpenRe should analyze the selected media.</p>
 
@@ -562,7 +649,7 @@ export default function App() {
                 onClick={() => setScanMode('quick')}
                 className={`p-5 rounded-xl border cursor-pointer transition flex flex-col ${
                   scanMode === 'quick'
-                    ? 'border-sky-500 bg-sky-500/10'
+                    ? 'border-sky-500 bg-sky-500/10 ring-2 ring-sky-500/30'
                     : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
                 }`}
               >
@@ -580,7 +667,7 @@ export default function App() {
                 onClick={() => setScanMode('deep')}
                 className={`p-5 rounded-xl border cursor-pointer transition flex flex-col ${
                   scanMode === 'deep'
-                    ? 'border-indigo-500 bg-indigo-500/10'
+                    ? 'border-indigo-500 bg-indigo-500/10 ring-2 ring-indigo-500/30'
                     : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
                 }`}
               >
@@ -595,7 +682,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+            <div className="shrink-0 pt-4 border-t border-slate-800 flex items-center justify-between mt-auto">
               <button
                 onClick={() => setCurrentStep(1)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
@@ -604,9 +691,9 @@ export default function App() {
               </button>
               <button
                 onClick={() => setCurrentStep(3)}
-                className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
+                className="px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
               >
-                Continue to Filters <ArrowRight className="w-3.5 h-3.5" />
+                Continue to Filters <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -614,7 +701,7 @@ export default function App() {
 
         {/* STEP 3: Apply Filters */}
         {currentStep === 3 && (
-          <div className="flex-1 flex flex-col max-w-4xl mx-auto w-full">
+          <div className="flex-1 min-h-0 flex flex-col max-w-4xl mx-auto w-full">
             <h2 className="text-xl font-bold mb-1">Step 3 — Apply Search Filters</h2>
             <p className="text-xs text-slate-400 mb-6">Select which file types you are looking to recover.</p>
 
@@ -641,7 +728,7 @@ export default function App() {
                     }}
                     className={`p-4 rounded-lg border cursor-pointer transition flex items-center gap-3 ${
                       isSelected
-                        ? 'border-sky-500 bg-sky-500/10 text-sky-200'
+                        ? 'border-sky-500 bg-sky-500/15 ring-2 ring-sky-500/30 text-sky-200'
                         : 'border-slate-800 bg-slate-900/40 text-slate-400 hover:border-slate-700'
                     }`}
                   >
@@ -655,7 +742,7 @@ export default function App() {
               })}
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+            <div className="shrink-0 pt-4 border-t border-slate-800 flex items-center justify-between mt-auto">
               <button
                 onClick={() => setCurrentStep(2)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
@@ -666,7 +753,7 @@ export default function App() {
                 onClick={handleStartScan}
                 className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition flex items-center gap-2"
               >
-                <Play className="w-3.5 h-3.5 fill-current" /> Start Scan Now
+                <Play className="w-4 h-4 fill-current" /> Start Scan Now
               </button>
             </div>
           </div>
@@ -674,7 +761,7 @@ export default function App() {
 
         {/* STEP 4: Scanning Screen */}
         {currentStep === 4 && (
-          <div className="flex-1 flex flex-col items-center justify-center max-w-2xl mx-auto w-full">
+          <div className="flex-1 min-h-0 flex flex-col items-center justify-center max-w-2xl mx-auto w-full">
             <div className="w-16 h-16 rounded-full bg-sky-500/10 text-sky-400 flex items-center justify-center mb-6 animate-pulse">
               <FileSearch className="w-8 h-8" />
             </div>
@@ -682,7 +769,6 @@ export default function App() {
             <h2 className="text-2xl font-bold mb-2">Scanning in Progress</h2>
             <p className="text-xs text-slate-400 mb-8">{scanProgress.currentLabel}</p>
 
-            {/* Progress Bar */}
             <div className="w-full bg-slate-800 h-3 rounded-full overflow-hidden mb-4">
               <div
                 className="bg-gradient-to-r from-sky-500 to-indigo-500 h-full transition-all duration-300 ease-out"
@@ -705,11 +791,10 @@ export default function App() {
           </div>
         )}
 
-        {/* STEP 5: Review Results & Previews */}
+        {/* STEP 5: Review Results */}
         {currentStep === 5 && (
-          <div className="flex-1 flex flex-col h-full overflow-hidden">
-            {/* Toolbar */}
-            <div className="flex items-center justify-between gap-4 mb-4 pb-3 border-b border-slate-800">
+          <div className="flex-1 min-h-0 flex flex-col h-full overflow-hidden">
+            <div className="shrink-0 flex items-center justify-between gap-4 mb-4 pb-3 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <input
                   type="text"
@@ -764,8 +849,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* File List / Grid */}
-            <div className="flex-1 overflow-y-auto pr-1">
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1">
               {viewMode === 'list' ? (
                 <table className="w-full text-left text-xs">
                   <thead className="sticky top-0 bg-slate-900 text-slate-400 font-semibold border-b border-slate-800">
@@ -850,11 +934,10 @@ export default function App() {
 
         {/* STEP 6: Recover Destination */}
         {currentStep === 6 && (
-          <div className="flex-1 flex flex-col max-w-2xl mx-auto w-full justify-center">
+          <div className="flex-1 min-h-0 flex flex-col max-w-2xl mx-auto w-full justify-center">
             <h2 className="text-2xl font-bold mb-2">Step 6 — Choose Destination Directory</h2>
             <p className="text-xs text-slate-400 mb-6">Select a safe location to write the recovered files.</p>
 
-            {/* Target Path Box */}
             <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60 mb-4">
               <label className="text-xs font-semibold text-slate-300 block mb-2">Recovery Target Directory:</label>
               <div className="flex items-center gap-2">
@@ -874,7 +957,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Collision Warning Banner */}
             {collisionWarning ? (
               <div className="p-4 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs flex items-start gap-3 mb-6">
                 <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
@@ -890,7 +972,7 @@ export default function App() {
               </div>
             )}
 
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+            <div className="shrink-0 pt-4 border-t border-slate-800 flex items-center justify-between">
               <button
                 onClick={() => setCurrentStep(5)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
@@ -898,7 +980,7 @@ export default function App() {
                 Back to Results
               </button>
               <button
-                disabled={!destPath || !!collisionWarning || isRecovering}
+                disabled={!destPath || (!!collisionWarning && enforceSeparation) || isRecovering}
                 onClick={handleStartRecovery}
                 className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition flex items-center gap-2"
               >
@@ -910,8 +992,8 @@ export default function App() {
 
         {/* STEP 7: Audit Report Screen */}
         {currentStep === 7 && (
-          <div className="flex-1 flex flex-col max-w-3xl mx-auto w-full">
-            <div className="text-center mb-6">
+          <div className="flex-1 min-h-0 flex flex-col max-w-3xl mx-auto w-full">
+            <div className="text-center mb-6 shrink-0">
               <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3">
                 <CheckCircle2 className="w-6 h-6" />
               </div>
@@ -919,11 +1001,11 @@ export default function App() {
               <p className="text-xs text-slate-400">All chosen files have been written to the destination directory.</p>
             </div>
 
-            <div className="flex-1 bg-slate-900 rounded-xl border border-slate-800 p-4 font-mono text-xs overflow-y-auto mb-6 whitespace-pre-wrap text-slate-300">
+            <div className="flex-1 min-h-0 bg-slate-900 rounded-xl border border-slate-800 p-4 font-mono text-xs overflow-y-auto mb-6 whitespace-pre-wrap text-slate-300">
               {recoveryReportMd}
             </div>
 
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800">
+            <div className="shrink-0 flex items-center justify-between pt-4 border-t border-slate-800">
               <button
                 onClick={() => setCurrentStep(0)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition flex items-center gap-1.5"
@@ -958,8 +1040,7 @@ export default function App() {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {/* Visual Thumbnail */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
             {previewData?.thumbnail_base64 && (
               <div className="border border-slate-800 rounded-xl p-3 bg-slate-950 flex flex-col items-center">
                 <img
@@ -975,7 +1056,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Repair Banner if corrupt/truncated image */}
             {(previewFile.extension === 'jpg' || previewFile.extension === 'png') && (
               <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 flex items-center justify-between">
                 <div>
@@ -1000,7 +1080,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Metadata Entries */}
             <div className="border border-slate-800 rounded-lg p-3 bg-slate-950/50">
               <div className="text-xs font-semibold text-slate-400 mb-2">Metadata & Allocation:</div>
               <div className="space-y-1 text-xs">
@@ -1019,7 +1098,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Hex Dump Section */}
             {previewData?.hex_dump && previewData.hex_dump.length > 0 && (
               <div className="border border-slate-800 rounded-lg p-3 bg-slate-950 font-mono text-[11px] overflow-x-auto">
                 <div className="text-slate-400 font-semibold mb-2">Raw Sector Dump (First 512 bytes):</div>
@@ -1032,6 +1110,134 @@ export default function App() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal (Fully Implemented) */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center">
+                  <Sliders className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">OpenRe Preferences & Safety</h3>
+                  <div className="text-[11px] text-slate-400">Configure recovery engine behavior</div>
+                </div>
+              </div>
+              <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-100 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-5 text-xs">
+              {/* Language selection */}
+              <div>
+                <label className="font-semibold text-slate-300 block mb-1.5">Application Language / Idioma</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setLanguage('en')}
+                    className={`py-2 px-3 rounded-lg border text-left font-medium transition ${
+                      language === 'en' ? 'border-sky-500 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
+                    }`}
+                  >
+                    English (Default)
+                  </button>
+                  <button
+                    onClick={() => setLanguage('pt')}
+                    className={`py-2 px-3 rounded-lg border text-left font-medium transition ${
+                      language === 'pt' ? 'border-sky-500 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
+                    }`}
+                  >
+                    Português (Brasil)
+                  </button>
+                </div>
+              </div>
+
+              {/* Stride selection */}
+              <div>
+                <label className="font-semibold text-slate-300 block mb-1">Deep Carving Stride</label>
+                <p className="text-[11px] text-slate-400 mb-2">Block boundary alignment when searching raw disk sectors.</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setScanStride(512)}
+                    className={`p-2.5 rounded-lg border text-left transition ${
+                      scanStride === 512 ? 'border-sky-500 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
+                    }`}
+                  >
+                    <div className="font-semibold text-xs">512 Bytes (Recommended)</div>
+                    <div className="text-[10px] text-slate-400">Maximum forensic sensitivity</div>
+                  </button>
+                  <button
+                    onClick={() => setScanStride(4096)}
+                    className={`p-2.5 rounded-lg border text-left transition ${
+                      scanStride === 4096 ? 'border-sky-500 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
+                    }`}
+                  >
+                    <div className="font-semibold text-xs">4096 Bytes (Fast)</div>
+                    <div className="text-[10px] text-slate-400">4K cluster alignment</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Safety Toggles */}
+              <div className="space-y-3 pt-2 border-t border-slate-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-slate-300">Prevent Same-Device Recovery</div>
+                    <div className="text-[11px] text-slate-400">Blocks saving files onto the scanned drive to avoid overwriting.</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={enforceSeparation}
+                    onChange={(e) => setEnforceSeparation(e.target.checked)}
+                    className="w-4 h-4 accent-sky-500 rounded"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-slate-300">Auto-Detect Truncated JPEG/PNG</div>
+                    <div className="text-[11px] text-slate-400">Enables one-click repair copy button for missing EOI/CRC markers.</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={autoRepairMarkers}
+                    onChange={(e) => setAutoRepairMarkers(e.target.checked)}
+                    className="w-4 h-4 accent-sky-500 rounded"
+                  />
+                </div>
+              </div>
+
+              {/* Buffer Size */}
+              <div className="pt-2 border-t border-slate-800">
+                <div className="flex justify-between items-center mb-1">
+                  <label className="font-semibold text-slate-300">Sliding Window Buffer Size</label>
+                  <span className="font-mono text-sky-400 font-bold">{maxBufferSizeMb} MB</span>
+                </div>
+                <input
+                  type="range"
+                  min="64"
+                  max="512"
+                  step="64"
+                  value={maxBufferSizeMb}
+                  onChange={(e) => setMaxBufferSizeMb(Number(e.target.value))}
+                  className="w-full accent-sky-500"
+                />
+              </div>
+            </div>
+
+            <div className="shrink-0 pt-4 border-t border-slate-800 flex justify-end gap-2 mt-4">
+              <button
+                onClick={() => setShowSettings(false)}
+                className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md transition"
+              >
+                Save & Close
+              </button>
+            </div>
           </div>
         </div>
       )}
