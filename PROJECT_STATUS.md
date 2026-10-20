@@ -3,7 +3,7 @@
 **Project Name:** OpenRe  
 **Target:** Open-Source, Cross-Platform File Recovery Desktop Application  
 **Repository:** `openre`  
-**Current Phase:** Phase 6 — Ready for Public Release  
+**Current Phase:** Release v0.1.1  
 **Last Updated:** October 20, 2026  
 
 ---
@@ -77,7 +77,7 @@ Total: 25 passed; 0 failed; 0 ignored; 100% success rate.
 ## 5. Built Release Artifacts
 
 - **Windows Portable Distribution:** `release/OpenRe-Windows-x64-Portable.zip` (6,982,530 bytes)
-- **SHA-256 Checksum:** `ebefb1cd933afd5efff65da2ac9b325c709e63e3c09b54fcdb97d918449c8783`
+- **SHA-256 Checksum:** `709038e4af9261fef769e199473c7fb5db855ae06f56e4a6cdad642a6df414aa`
 - **Main GUI Executable:** `target/x86_64-pc-windows-gnu/release/OpenRe.exe` (~11.1 MB)
 - **CLI Diagnostic Executable:** `target/x86_64-pc-windows-gnu/release/openre-cli.exe` (8,695,930 bytes)
 

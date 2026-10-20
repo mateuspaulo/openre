@@ -5,6 +5,19 @@ All notable changes to **OpenRe** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-20
+
+### Added
+- **Docked Footer Diagnostic Terminal:** Live logging console embedded into the application footer showing real-time disk reads, block scanning progress, carves, warnings, and error messages.
+- **Terminal Controls:** Enabled by default with immediate close ("X") button, Settings modal toggle switch, top header shortcut button, auto-scroll, and one-click copy to clipboard.
+- **Folder Virtual Block Reader:** Resilient recursive directory stream reader (`FolderBlockReader`) capable of deep carving across any user folder without requiring administrator elevation.
+- **Sector-Aligned Windows Volume Reader:** Direct physical partition reader (`VolumeBlockReader`) using 4096-byte aligned I/O for Windows raw volumes (`\\.\C:`, `\\.\D:`).
+
+### Fixed
+- **Premature Deep Scan Termination:** Resolved issue where locked system files (e.g. `DumpStack.log.tmp`) caused `FolderBlockReader` to return zero bytes, prematurely breaking out of the carving loop.
+- **Un-Elevated Drive Access:** Added automatic graceful fallback when raw volume access is denied by Windows, streaming files across the drive root without freezing.
+- **Scan Progress Throttling:** Capped UI IPC event dispatch to 100 ms (10 FPS) to prevent WebView2 event queue saturation during high-throughput (250+ MB/s) carving.
+
 ## [0.1.0] - 2026-10-20
 
 ### Added

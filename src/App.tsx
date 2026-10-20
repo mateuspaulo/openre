@@ -130,7 +130,7 @@ export default function App() {
       id: 'init-1',
       timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
       level: 'info',
-      message: 'OpenRe v0.1.0 engine initialized in strict offline-first mode. Zero telemetry active.',
+      message: 'OpenRe v0.1.1 engine initialized in strict offline-first mode. Zero telemetry active.',
     },
     {
       id: 'init-2',
@@ -388,7 +388,7 @@ export default function App() {
           <div>
             <div className="font-semibold text-base tracking-wide flex items-center gap-2">
               OpenRe
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.0</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.1</span>
             </div>
             <div className="text-[11px] text-slate-400">Professional File Recovery</div>
           </div>
