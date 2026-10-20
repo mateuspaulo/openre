@@ -1958,28 +1958,50 @@ export default function App() {
                   </div>
                 )}
 
-                {/* Image Repair Option */}
-                {(previewFile.extension === 'jpg' || previewFile.extension === 'png') && (
-                  <div className="p-3 rounded-lg border border-indigo-500/30 bg-indigo-500/10 flex items-center justify-between">
-                    <div>
-                      <div className="font-semibold text-xs text-indigo-300">
-                        {language === 'en' ? 'Non-Destructive Image Repair' : 'Reparo Não Destrutivo de Imagem'}
-                      </div>
-                      <div className="text-[11px] text-slate-400">
-                        {language === 'en'
-                          ? 'Reconstruct missing markers, recalculate CRCs, and choose destination to save.'
-                          : 'Reconstrói marcadores perdidos, recalcula CRCs e permite escolher onde salvar.'}
-                      </div>
+                {/* Single-File Instant Restore & Save (Available for ALL file types) */}
+                <div className="p-3 rounded-xl border border-indigo-500/30 bg-indigo-500/10 flex items-center justify-between shadow-sm">
+                  <div className="pr-2">
+                    <div className="font-semibold text-xs text-indigo-200 flex items-center gap-1.5 mb-0.5">
+                      {['jpg', 'jpeg', 'png'].includes(previewFile.extension.toLowerCase()) ? (
+                        <>
+                          <Wrench className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>{language === 'en' ? 'Restore & Repair File' : 'Restaurar & Reparar Arquivo'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3.5 h-3.5 text-sky-400" />
+                          <span>{language === 'en' ? 'Restore & Save Copy' : 'Restaurar & Salvar Cópia'}</span>
+                        </>
+                      )}
                     </div>
-                    <button
-                      onClick={handleRepairCopy}
-                      className="px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1.5 shrink-0"
-                    >
-                      <Wrench className="w-3.5 h-3.5" />
-                      <span>{language === 'en' ? 'Repair Copy' : 'Reparar Cópia'}</span>
-                    </button>
+                    <div className="text-[11px] text-slate-400 leading-tight">
+                      {['jpg', 'jpeg', 'png'].includes(previewFile.extension.toLowerCase())
+                        ? (language === 'en'
+                            ? 'Reconstruct missing markers and choose directory to save.'
+                            : 'Reconstrói marcadores perdidos e permite escolher onde salvar.')
+                        : (language === 'en'
+                            ? 'Extract this file immediately and choose destination path.'
+                            : 'Extrai este arquivo imediatamente e permite escolher onde salvar.')}
+                    </div>
                   </div>
-                )}
+                  <button
+                    onClick={handleRepairCopy}
+                    className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition flex items-center gap-1.5 shrink-0 shadow-md shadow-indigo-600/20"
+                    title={language === 'en' ? 'Choose where to save this file copy' : 'Escolher onde salvar a cópia deste arquivo'}
+                  >
+                    {['jpg', 'jpeg', 'png'].includes(previewFile.extension.toLowerCase()) ? (
+                      <>
+                        <Wrench className="w-3.5 h-3.5" />
+                        <span>{language === 'en' ? 'Repair & Save' : 'Reparar & Salvar'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <FolderCheck className="w-3.5 h-3.5" />
+                        <span>{language === 'en' ? 'Save File...' : 'Salvar Arquivo...'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
 
                 {repairReport && (
                   <div
@@ -1998,7 +2020,7 @@ export default function App() {
                         {repairReport.saved ? (
                           <>
                             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                            <span>{language === 'en' ? 'Repaired Copy Saved Successfully!' : 'Cópia Reparada Salva com Sucesso!'}</span>
+                            <span>{language === 'en' ? 'File Restored & Saved Successfully!' : 'Arquivo Restaurado & Salvo com Sucesso!'}</span>
                           </>
                         ) : repairReport.user_cancelled ? (
                           <>
@@ -2008,12 +2030,12 @@ export default function App() {
                         ) : repairReport.success ? (
                           <>
                             <CheckCircle2 className="w-4 h-4 text-indigo-400" />
-                            <span>{language === 'en' ? 'Repair Completed' : 'Reparo Concluído'}</span>
+                            <span>{language === 'en' ? 'Extraction Completed' : 'Extração Concluída'}</span>
                           </>
                         ) : (
                           <>
                             <AlertTriangle className="w-4 h-4 text-rose-400" />
-                            <span>{language === 'en' ? 'Repair Issues Found' : 'Problemas Encontrados'}</span>
+                            <span>{language === 'en' ? 'Extraction Issues Found' : 'Problemas Encontrados'}</span>
                           </>
                         )}
                       </div>

@@ -347,7 +347,7 @@ fn handle_ipc_message(
             let fname = msg.payload.get("filename").and_then(|v| v.as_str()).unwrap_or_default();
             let orig_path = msg.payload.get("original_path").and_then(|v| v.as_str()).unwrap_or_default();
 
-            emit_log("info", &format!("Running non-destructive image validation & repair on '{}'...", fname), proxy);
+            emit_log("info", &format!("Initiating single-file extraction & restoration for '{}'...", fname), proxy);
 
             let mut success = false;
             let mut fixes = Vec::new();
@@ -357,7 +357,7 @@ fn handle_ipc_message(
             let mut user_cancelled = false;
 
             let effective_size = if size > 0 { size as usize } else { 4 * 1024 * 1024 };
-            let read_limit = effective_size.min(10 * 1024 * 1024);
+            let read_limit = effective_size.min(100 * 1024 * 1024); // Up to 100MB per single file restore
 
             let buf_opt = if !orig_path.is_empty() && Path::new(orig_path).is_file() {
                 if let Ok(mut f) = std::fs::File::open(orig_path) {
@@ -379,52 +379,74 @@ fn handle_ipc_message(
             };
 
             if let Some(buf) = buf_opt {
-                if let Ok(report) = repair_image(&buf, fname) {
-                    success = report.success;
-                    fixes = report.fixes_applied;
-                    issues = report.issues_found;
+                let clean_name = Path::new(fname)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "recovered_file".to_string());
+                let ext = Path::new(&clean_name)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
 
-                    // If file has valid repaired data, ask the user where to save the copy
-                    if !report.repaired_data.is_empty() {
-                        let clean_name = Path::new(fname).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "image.jpg".to_string());
-                        let default_name = format!("repaired_{}", clean_name);
-                        let is_png = fname.to_lowercase().ends_with(".png");
+                let is_image = ext == "jpg" || ext == "jpeg" || ext == "png";
 
-                        let mut dialog = rfd::FileDialog::new()
-                            .set_title("Save Repaired File Copy As / Salvar Cópia Reparada Como")
-                            .set_file_name(&default_name);
-
-                        if is_png {
-                            dialog = dialog.add_filter("PNG Image", &["png"]);
+                let data_to_save = if is_image {
+                    if let Ok(report) = repair_image(&buf, fname) {
+                        success = report.success;
+                        fixes = report.fixes_applied;
+                        issues = report.issues_found;
+                        if !report.repaired_data.is_empty() {
+                            report.repaired_data
                         } else {
-                            dialog = dialog.add_filter("JPEG Image", &["jpg", "jpeg"]);
+                            buf
                         }
-
-                        if let Some(dest_path) = dialog.save_file() {
-                            if std::fs::write(&dest_path, &report.repaired_data).is_ok() {
-                                saved = true;
-                                let p_str = dest_path.to_string_lossy().to_string();
-                                emit_log("success", &format!("Repaired copy saved successfully to: '{}'", p_str), proxy);
-                                saved_path_str = Some(p_str);
-                            } else {
-                                emit_log("error", &format!("Failed to write repaired file to: '{}'", dest_path.display()), proxy);
-                            }
-                        } else {
-                            user_cancelled = true;
-                            emit_log("info", "Save destination selection cancelled by user.", proxy);
-                        }
+                    } else {
+                        buf
                     }
+                } else {
+                    success = true;
+                    fixes.push(format!("Extracted {} bytes directly from source storage", buf.len()));
+                    buf
+                };
+
+                let default_name = if is_image && !fixes.is_empty() {
+                    format!("repaired_{}", clean_name)
+                } else {
+                    format!("recovered_{}", clean_name)
+                };
+
+                let mut dialog = rfd::FileDialog::new()
+                    .set_title("Save File Copy As / Salvar Cópia Como")
+                    .set_file_name(&default_name);
+
+                if !ext.is_empty() {
+                    dialog = dialog.add_filter(&format!("{} File", ext.to_uppercase()), &[&ext]);
+                }
+
+                if let Some(dest_path) = dialog.save_file() {
+                    if std::fs::write(&dest_path, &data_to_save).is_ok() {
+                        saved = true;
+                        let p_str = dest_path.to_string_lossy().to_string();
+                        emit_log("success", &format!("File copy saved successfully to: '{}'", p_str), proxy);
+                        saved_path_str = Some(p_str);
+                    } else {
+                        emit_log("error", &format!("Failed to write file to: '{}'", dest_path.display()), proxy);
+                    }
+                } else {
+                    user_cancelled = true;
+                    emit_log("info", "Save destination selection cancelled by user.", proxy);
                 }
             }
 
             if saved {
-                emit_log("success", &format!("Non-destructive repair applied for '{}': {} fixes applied and copy saved.", fname, fixes.len()), proxy);
+                emit_log("success", &format!("File copy for '{}' saved successfully.", fname), proxy);
             } else if user_cancelled {
-                emit_log("info", &format!("Repair copy for '{}' was prepared but saving was cancelled.", fname), proxy);
+                emit_log("info", &format!("Save destination for '{}' cancelled by user.", fname), proxy);
             } else if success {
-                emit_log("info", &format!("Repair validation succeeded for '{}': {} fixes identified.", fname, fixes.len()), proxy);
+                emit_log("info", &format!("Restoration analysis ready for '{}'.", fname), proxy);
             } else {
-                emit_log("warn", &format!("Repair analysis completed for '{}': {} issues found.", fname, issues.len()), proxy);
+                emit_log("warn", &format!("Restoration warning for '{}': issues encountered.", fname), proxy);
             }
 
             let json = serde_json::json!({
