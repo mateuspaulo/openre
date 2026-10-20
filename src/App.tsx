@@ -65,6 +65,7 @@ interface RecoveredFile {
   modified_at?: string;
   metadata_source: string;
   sha256?: string;
+  thumbnail_url?: string;
 }
 
 interface HexLine {
@@ -173,9 +174,6 @@ export default function App() {
   const [isPreparingResults, setIsPreparingResults] = useState<boolean>(false);
   const [preparingCount, setPreparingCount] = useState<number>(0);
 
-  // Image thumbnails cache: { [fileId]: dataUrl }
-  const [imageThumbnails, setImageThumbnails] = useState<Record<string, string>>({});
-  const requestedThumbnailsRef = useRef<Set<string>>(new Set());
   const activePreviewIdRef = useRef<string | null>(null);
 
   const appendLog = (level: 'info' | 'warn' | 'error' | 'success', message: string, timestamp?: string) => {
@@ -334,10 +332,7 @@ export default function App() {
         setSelectionMode('all');
         setDeselectedFileIds(new Set());
         setSelectedFileIds(new Set());
-
-        if (initialItems.length > 0) {
-          openPreview(initialItems[0]);
-        }
+        setPreviewFile(null);
 
         setTimeout(() => {
           setIsPreparingResults(false);
@@ -374,8 +369,6 @@ export default function App() {
     setSelectionMode('all');
     setDeselectedFileIds(new Set());
     setSelectedFileIds(new Set());
-    setImageThumbnails({});
-    requestedThumbnailsRef.current.clear();
     setIsScanning(true);
     setScanError(null);
     setCurrentStep(4);
@@ -461,12 +454,12 @@ export default function App() {
     setRepairReport(null);
     setPreviewTab('media');
 
-    // If thumbnail already cached for image, pre-seed previewData for instant visual feedback
-    if (file.category === 'Image' && imageThumbnails[file.id]) {
+    // If thumbnail already generated for image, pre-seed previewData for instant visual feedback
+    if (file.category === 'Image' && file.thumbnail_url) {
       setPreviewData({
         preview_type: 'image',
-        thumbnail_base64: imageThumbnails[file.id],
-        media_data_url: imageThumbnails[file.id],
+        thumbnail_base64: file.thumbnail_url,
+        media_data_url: file.thumbnail_url,
         hex_dump: [],
         metadata_entries: [
           [language === 'en' ? 'Format' : 'Formato', file.extension.toUpperCase()],
@@ -521,6 +514,7 @@ export default function App() {
           page_size: size,
           category,
           search,
+          source_id: selectedSource?.id,
         });
 
         if (res) {
@@ -631,36 +625,6 @@ export default function App() {
       setSelectedFileIds(next);
     }
   };
-
-  // Batch fetch thumbnails for visible images on current page
-  useEffect(() => {
-    if (currentStep !== 5) return;
-    const imageFiles = paginatedFiles.filter(
-      (f) => f.category === 'Image' && !imageThumbnails[f.id] && !requestedThumbnailsRef.current.has(f.id)
-    );
-    if (imageFiles.length === 0) return;
-
-    imageFiles.forEach((f) => requestedThumbnailsRef.current.add(f.id));
-
-    const batchPayload = imageFiles.map((f) => ({
-      id: f.id,
-      source_id: selectedSource?.id,
-      source_offset: f.source_offset,
-      size_bytes: f.size_bytes,
-      extension: f.extension,
-      original_path: f.original_path,
-    }));
-
-    sendIpc('get_thumbnails', { items: batchPayload })
-      .then((res: any) => {
-        if (res && res.thumbnails && Object.keys(res.thumbnails).length > 0) {
-          setImageThumbnails((prev) => ({ ...prev, ...res.thumbnails }));
-        }
-      })
-      .catch((err) => {
-        console.error('Failed to load thumbnails:', err);
-      });
-  }, [paginatedFiles, currentStep, selectedSource, imageThumbnails]);
 
   const getCategoryIcon = (cat: string) => {
     switch (cat) {
@@ -1535,9 +1499,9 @@ export default function App() {
                             />
                           </td>
                           <td className="py-2 px-3 flex items-center gap-2 font-mono">
-                            {file.category === 'Image' && imageThumbnails[file.id] ? (
+                            {file.category === 'Image' && file.thumbnail_url ? (
                               <img
-                                src={imageThumbnails[file.id]}
+                                src={file.thumbnail_url}
                                 alt={file.filename}
                                 className="w-5 h-5 object-cover rounded border border-slate-700/80 shrink-0 select-none"
                                 loading="lazy"
@@ -1612,9 +1576,9 @@ export default function App() {
                         {/* Content Quick Glance Area in Grid Card */}
                         <div className="h-16 rounded-lg bg-black/40 border border-slate-800/80 mb-2 flex items-center justify-center p-1.5 text-center overflow-hidden">
                           {file.category === 'Image' ? (
-                            imageThumbnails[file.id] ? (
+                            file.thumbnail_url ? (
                               <img
-                                src={imageThumbnails[file.id]}
+                                src={file.thumbnail_url}
                                 alt={file.filename}
                                 className="max-h-full max-w-full object-contain rounded select-none group-hover:scale-105 transition-transform duration-200"
                                 loading="lazy"

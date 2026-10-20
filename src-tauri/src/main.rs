@@ -31,6 +31,75 @@ enum UserEvent {
 struct AppState {
     cancel_token: CancellationToken,
     last_discovered: Vec<RecoveredFile>,
+    current_source_id: String,
+}
+
+#[derive(serde::Serialize)]
+struct PageItem {
+    #[serde(flatten)]
+    file: RecoveredFile,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thumbnail_url: Option<String>,
+}
+
+fn load_thumbnail_for_file(
+    file: &RecoveredFile,
+    source_id: &str,
+    reader_cache: &mut std::collections::HashMap<String, Box<dyn BlockReader>>,
+) -> Option<String> {
+    if file.category != recovery_core::FileCategory::Image {
+        return None;
+    }
+
+    let effective_size = if file.size_bytes > 0 { file.size_bytes as usize } else { 2 * 1024 * 1024 };
+    let read_limit = effective_size.min(4 * 1024 * 1024).max(16 * 1024);
+
+    let buf_opt = if let Some(ref orig_path) = file.original_path {
+        if !orig_path.is_empty() && Path::new(orig_path).is_file() {
+            if let Ok(mut f) = std::fs::File::open(orig_path) {
+                use std::io::Read;
+                let mut buf = vec![0u8; read_limit];
+                let n = f.read(&mut buf).unwrap_or(0);
+                buf.truncate(n);
+                Some(buf)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let buf_opt = match buf_opt {
+        Some(b) => Some(b),
+        None => {
+            if !source_id.is_empty() {
+                if !reader_cache.contains_key(source_id) {
+                    if let Ok(r) = open_block_reader(source_id) {
+                        reader_cache.insert(source_id.to_string(), r);
+                    }
+                }
+                if let Some(r) = reader_cache.get_mut(source_id) {
+                    let mut buf = vec![0u8; read_limit];
+                    let n = r.read_at(file.source_offset, &mut buf).unwrap_or(0);
+                    buf.truncate(n);
+                    Some(buf)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+    };
+
+    if let Some(buf) = buf_opt {
+        generate_thumbnail_data_url(&buf, &file.extension)
+    } else {
+        None
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,6 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = Arc::new(Mutex::new(AppState {
         cancel_token: CancellationToken::new(),
         last_discovered: Vec::new(),
+        current_source_id: String::new(),
     }));
 
     let html_content = include_str!("../../dist/index.html");
@@ -129,6 +199,7 @@ fn handle_ipc_message(
             let cancel = CancellationToken::new();
             if let Ok(mut st) = state.lock() {
                 st.cancel_token = cancel.clone();
+                st.current_source_id = source_id.clone();
             }
 
             let proxy_clone = proxy.clone();
@@ -265,7 +336,18 @@ fn handle_ipc_message(
                             }
                         }
 
-                        let initial_page: Vec<RecoveredFile> = files.iter().take(20).cloned().collect();
+                        let mut reader_cache: std::collections::HashMap<String, Box<dyn BlockReader>> = std::collections::HashMap::new();
+                        let initial_page: Vec<PageItem> = files
+                            .iter()
+                            .take(20)
+                            .map(|f| {
+                                let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache);
+                                PageItem {
+                                    file: f.clone(),
+                                    thumbnail_url: thumb,
+                                }
+                            })
+                            .collect();
 
                         if let Ok(mut st) = state_clone.lock() {
                             st.last_discovered = files;
@@ -302,7 +384,18 @@ fn handle_ipc_message(
                                 *c = serde_json::Value::from(n + 1);
                             }
                         }
-                        let initial_page: Vec<RecoveredFile> = preserved_files.iter().take(20).cloned().collect();
+                        let mut reader_cache: std::collections::HashMap<String, Box<dyn BlockReader>> = std::collections::HashMap::new();
+                        let initial_page: Vec<PageItem> = preserved_files
+                            .iter()
+                            .take(20)
+                            .map(|f| {
+                                let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache);
+                                PageItem {
+                                    file: f.clone(),
+                                    thumbnail_url: thumb,
+                                }
+                            })
+                            .collect();
 
                         emit_log("info", &format!("Scan stopped by user. Preserved {} files discovered so far.", count), &proxy_clone);
                         emit_event(
@@ -449,11 +542,16 @@ fn handle_ipc_message(
             let page_size = msg.payload.get("page_size").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
             let category_filter = msg.payload.get("category").and_then(|v| v.as_str()).unwrap_or("All");
             let search = msg.payload.get("search").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();
+            let mut source_id = msg.payload.get("source_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
             let page = page.max(1);
             let page_size = page_size.max(1);
 
             if let Ok(st) = state.lock() {
+                if source_id.is_empty() {
+                    source_id = st.current_source_id.clone();
+                }
+
                 let mut cat_counts = serde_json::Map::new();
                 for f in &st.last_discovered {
                     let cat_str = f.category.as_str();
@@ -479,11 +577,18 @@ fn handle_ipc_message(
                 let safe_page = page.min(total_pages);
                 let start_idx = (safe_page - 1) * page_size;
 
-                let page_items: Vec<RecoveredFile> = filtered
+                let mut reader_cache: std::collections::HashMap<String, Box<dyn BlockReader>> = std::collections::HashMap::new();
+                let page_items: Vec<PageItem> = filtered
                     .into_iter()
                     .skip(start_idx)
                     .take(page_size)
-                    .cloned()
+                    .map(|f| {
+                        let thumb = load_thumbnail_for_file(f, &source_id, &mut reader_cache);
+                        PageItem {
+                            file: (*f).clone(),
+                            thumbnail_url: thumb,
+                        }
+                    })
                     .collect();
 
                 let resp = serde_json::json!({
