@@ -150,7 +150,7 @@ export default function App() {
       id: 'init-1',
       timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
       level: 'info',
-      message: 'OpenRe v0.1.4 engine initialized in strict offline-first mode. Zero telemetry active.',
+      message: 'OpenRe v0.1.5 engine initialized in strict offline-first mode. Zero telemetry active.',
     },
     {
       id: 'init-2',
@@ -347,14 +347,19 @@ export default function App() {
     setIsScanning(true);
     setScanError(null);
     setCurrentStep(4);
-    appendLog('info', `Starting ${scanMode.toUpperCase()} scan on ${selectedSource.name}...`);
+    appendLog(
+      'info',
+      language === 'en'
+        ? `Starting ${scanMode.toUpperCase()} scan on ${selectedSource.name}...`
+        : `Iniciando varredura ${scanMode === 'quick' ? 'RÁPIDA' : 'PROFUNDA'} em ${selectedSource.name}...`
+    );
     setScanProgress({
       percent: 0,
       scannedBytes: 0,
       totalBytes: selectedSource.size_bytes || 1024 * 1024 * 1024,
       speedMBps: 0,
       filesCount: 0,
-      currentLabel: 'Starting scan...',
+      currentLabel: language === 'en' ? 'Starting scan...' : 'Iniciando varredura...',
     });
 
     sendIpc('start_scan', {
@@ -384,7 +389,9 @@ export default function App() {
         const destLetter = selected.substring(0, 2).toUpperCase();
         if (sourceLetter.endsWith(':') && sourceLetter === destLetter) {
           setCollisionWarning(
-            `Destination drive (${destLetter}) matches the source drive being recovered! Writing files to the same drive overwrites deleted data. Select a different drive.`
+            language === 'en'
+              ? `Destination drive (${destLetter}) matches the source drive being recovered! Writing files to the same drive overwrites deleted data. Select a different drive.`
+              : `A unidade de destino (${destLetter}) é a mesma unidade sendo recuperada! Gravar arquivos na mesma unidade sobrescreve dados apagados. Selecione uma unidade diferente.`
           );
         } else {
           setCollisionWarning(null);
@@ -406,7 +413,10 @@ export default function App() {
 
     setIsRecovering(false);
     setRecoveryDone(true);
-    setRecoveryReportMd(res?.report_markdown || 'Recovery report generated successfully.');
+    setRecoveryReportMd(
+      res?.report_markdown ||
+        (language === 'en' ? 'Recovery report generated successfully.' : 'Relatório de recuperação gerado com sucesso.')
+    );
     setCurrentStep(7);
   };
 
@@ -515,14 +525,39 @@ export default function App() {
     }
   };
 
+  const getCategoryName = (cat: string) => {
+    if (language === 'en') return cat;
+    switch (cat) {
+      case 'Image': return 'Imagem';
+      case 'Document': return 'Documento';
+      case 'Video': return 'Vídeo';
+      case 'Audio': return 'Áudio';
+      case 'Archive': return 'Compactado';
+      case 'Text': return 'Texto';
+      default: return cat;
+    }
+  };
+
   const getIntegrityBadge = (status: string) => {
     if (status.includes('Likely')) {
-      return <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Likely</span>;
+      return (
+        <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+          {language === 'en' ? 'Likely Intact' : 'Provável Íntegro'}
+        </span>
+      );
     }
     if (status.includes('Partially')) {
-      return <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">Partial</span>;
+      return (
+        <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
+          {language === 'en' ? 'Partial' : 'Parcial'}
+        </span>
+      );
     }
-    return <span className="px-2 py-0.5 text-xs rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/30">Corrupted</span>;
+    return (
+      <span className="px-2 py-0.5 text-xs rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/30">
+        {language === 'en' ? 'Corrupted' : 'Corrompido'}
+      </span>
+    );
   };
 
   return (
@@ -536,16 +571,18 @@ export default function App() {
           <div>
             <div className="font-semibold text-base tracking-wide flex items-center gap-2">
               OpenRe
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.4</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 border border-sky-500/30">v0.1.5</span>
             </div>
-            <div className="text-[11px] text-slate-400">Professional File Recovery</div>
+            <div className="text-[11px] text-slate-400">
+              {language === 'en' ? 'Professional File Recovery' : 'Recuperação Profissional de Arquivos'}
+            </div>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs">
             <ShieldCheck className="w-3.5 h-3.5" />
-            <span>100% Offline & Private</span>
+            <span>{language === 'en' ? '100% Offline & Private' : '100% Offline & Privativo'}</span>
           </div>
 
           {/* Diagnostic Terminal Toggle Button */}
@@ -556,7 +593,7 @@ export default function App() {
                 ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
                 : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:text-slate-200'
             }`}
-            title={showTerminal ? 'Hide Terminal (Rodapé)' : 'Show Terminal (Rodapé)'}
+            title={showTerminal ? (language === 'en' ? 'Hide Terminal' : 'Ocultar Terminal (Rodapé)') : (language === 'en' ? 'Show Terminal' : 'Exibir Terminal (Rodapé)')}
           >
             <Terminal className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Terminal</span>
@@ -570,7 +607,7 @@ export default function App() {
           <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
-            title="Toggle theme"
+            title={language === 'en' ? 'Toggle theme' : 'Alternar tema claro/escuro'}
           >
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
@@ -578,7 +615,7 @@ export default function App() {
           <button
             onClick={() => setShowSettings(true)}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition relative"
-            title="Open Settings"
+            title={language === 'en' ? 'Open Settings' : 'Abrir Configurações'}
           >
             <Settings className="w-4 h-4" />
           </button>
@@ -586,7 +623,7 @@ export default function App() {
           <button
             onClick={() => setShowAbout(true)}
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition"
-            title="About OpenRe"
+            title={language === 'en' ? 'About OpenRe' : 'Sobre o OpenRe'}
           >
             <Info className="w-4 h-4" />
           </button>
@@ -599,7 +636,10 @@ export default function App() {
         {currentStep > 0 && (
           <div className="shrink-0 mb-4 flex items-center justify-between border-b border-slate-800 pb-3">
             <div className="flex items-center gap-2">
-              {['Source', 'Method', 'Filters', 'Scan', 'Review', 'Recover', 'Report'].map((label, idx) => {
+              {(language === 'en'
+                ? ['Source', 'Method', 'Filters', 'Scan', 'Review', 'Recover', 'Report']
+                : ['Origem', 'Método', 'Filtros', 'Varredura', 'Revisão', 'Recuperar', 'Relatório']
+              ).map((label, idx) => {
                 const stepNum = idx + 1;
                 const isCurrent = currentStep === stepNum;
                 const isPassed = currentStep > stepNum;
@@ -628,7 +668,7 @@ export default function App() {
                 onClick={() => setCurrentStep(0)}
                 className="text-xs text-slate-400 hover:text-slate-200 transition"
               >
-                Cancel to Dashboard
+                {language === 'en' ? 'Cancel to Dashboard' : 'Cancelar e Voltar'}
               </button>
             )}
           </div>
@@ -638,9 +678,13 @@ export default function App() {
         {currentStep === 0 && (
           <div className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center max-w-4xl mx-auto w-full">
             <div className="text-center mb-8">
-              <h1 className="text-3xl font-bold tracking-tight mb-2">Recover Your Lost Files Safely</h1>
+              <h1 className="text-3xl font-bold tracking-tight mb-2">
+                {language === 'en' ? 'Recover Your Lost Files Safely' : 'Recupere seus Arquivos com Segurança'}
+              </h1>
               <p className="text-slate-400 max-w-xl mx-auto text-sm">
-                OpenRe performs high-performance deep sector carving and filesystem undeletion with guaranteed offline privacy.
+                {language === 'en'
+                  ? 'OpenRe performs high-performance deep sector carving and filesystem undeletion with guaranteed offline privacy.'
+                  : 'O OpenRe realiza escavação profunda de setores e restauração de arquivos apagados com privacidade 100% offline garantida.'}
               </p>
             </div>
 
@@ -652,12 +696,16 @@ export default function App() {
                 <div className="w-10 h-10 rounded-lg bg-sky-500/10 text-sky-400 flex items-center justify-center mb-4 group-hover:scale-110 transition">
                   <FileSearch className="w-5 h-5" />
                 </div>
-                <h3 className="font-semibold text-base mb-1">Recover Files</h3>
+                <h3 className="font-semibold text-base mb-1">
+                  {language === 'en' ? 'Recover Files' : 'Recuperar Arquivos'}
+                </h3>
                 <p className="text-xs text-slate-400 mb-4 flex-1">
-                  Step-by-step guided recovery wizard for deleted files, pictures, and documents.
+                  {language === 'en'
+                    ? 'Step-by-step guided recovery wizard for deleted files, pictures, and documents.'
+                    : 'Assistente guiado passo a passo para arquivos excluídos, fotos e documentos.'}
                 </p>
                 <div className="text-xs font-medium text-sky-400 flex items-center gap-1">
-                  Start Wizard <ArrowRight className="w-3.5 h-3.5" />
+                  {language === 'en' ? 'Start Wizard' : 'Iniciar Assistente'} <ArrowRight className="w-3.5 h-3.5" />
                 </div>
               </div>
 
@@ -668,12 +716,16 @@ export default function App() {
                 <div className="w-10 h-10 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center mb-4 group-hover:scale-110 transition">
                   <HardDrive className="w-5 h-5" />
                 </div>
-                <h3 className="font-semibold text-base mb-1">Scan a Drive</h3>
+                <h3 className="font-semibold text-base mb-1">
+                  {language === 'en' ? 'Scan a Drive' : 'Varrer uma Unidade'}
+                </h3>
                 <p className="text-xs text-slate-400 mb-4 flex-1">
-                  Deep block-strided signature carving across damaged, unpartitioned, or formatted disks.
+                  {language === 'en'
+                    ? 'Deep block-strided signature carving across damaged, unpartitioned, or formatted disks.'
+                    : 'Escavação profunda por assinatura em setores de discos danificados ou formatados.'}
                 </p>
                 <div className="text-xs font-medium text-indigo-400 flex items-center gap-1">
-                  Select Drive <ArrowRight className="w-3.5 h-3.5" />
+                  {language === 'en' ? 'Select Drive' : 'Selecionar Unidade'} <ArrowRight className="w-3.5 h-3.5" />
                 </div>
               </div>
 
@@ -698,20 +750,24 @@ export default function App() {
                 <div className="w-10 h-10 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center mb-4 group-hover:scale-110 transition">
                   <FolderOpen className="w-5 h-5" />
                 </div>
-                <h3 className="font-semibold text-base mb-1">Scan a Disk Image</h3>
+                <h3 className="font-semibold text-base mb-1">
+                  {language === 'en' ? 'Scan a Disk Image' : 'Varrer Imagem de Disco'}
+                </h3>
                 <p className="text-xs text-slate-400 mb-4 flex-1">
-                  Load raw image dumps (.img, .dd, .raw) safely without accessing the physical media repeatedly.
+                  {language === 'en'
+                    ? 'Load raw image dumps (.img, .dd, .raw) safely without accessing the physical media repeatedly.'
+                    : 'Carregue imagens brutas (.img, .dd, .raw) sem acessar a mídia física repetidamente.'}
                 </p>
                 <div className="text-xs font-medium text-emerald-400 flex items-center gap-1">
-                  Browse Image <ArrowRight className="w-3.5 h-3.5" />
+                  {language === 'en' ? 'Browse Image' : 'Procurar Imagem'} <ArrowRight className="w-3.5 h-3.5" />
                 </div>
               </div>
             </div>
 
             <div className="text-xs text-slate-500 flex items-center gap-6">
               <span>✓ NTFS / FAT32 / exFAT / ext4</span>
-              <span>✓ 15+ Format-Aware Carvers</span>
-              <span>✓ Pre-Recovery Hex/Image Sandbox Preview</span>
+              <span>✓ {language === 'en' ? '15+ Format-Aware Carvers' : 'Mais de 15 Reconhecedores de Formatos'}</span>
+              <span>✓ {language === 'en' ? 'Pre-Recovery Media Sandbox Preview' : 'Pré-visualização Segura de Mídia e Hex'}</span>
             </div>
           </div>
         )}
@@ -721,9 +777,13 @@ export default function App() {
           <div className="flex-1 min-h-0 flex flex-col max-w-4xl mx-auto w-full">
             <div className="shrink-0 mb-3 flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold">Step 1 — Select Storage Media</h2>
+                <h2 className="text-xl font-bold">
+                  {language === 'en' ? 'Step 1 — Select Storage Media' : 'Etapa 1 — Selecionar Mídia de Armazenamento'}
+                </h2>
                 <p className="text-xs text-slate-400">
-                  Select a drive below, or double-click to proceed directly.
+                  {language === 'en'
+                    ? 'Select a drive below, or double-click to proceed directly.'
+                    : 'Selecione uma unidade abaixo ou clique duas vezes para avançar diretamente.'}
                 </p>
               </div>
 
@@ -746,7 +806,8 @@ export default function App() {
                   }}
                   className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-xs text-slate-200 transition flex items-center gap-1.5"
                 >
-                  <FolderOpen className="w-3.5 h-3.5 text-sky-400" /> Browse Folder...
+                  <FolderOpen className="w-3.5 h-3.5 text-sky-400" />
+                  <span>{language === 'en' ? 'Browse Folder...' : 'Procurar Pasta...'}</span>
                 </button>
 
                 <button
@@ -766,7 +827,8 @@ export default function App() {
                   }}
                   className="px-3 py-1.5 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-xs text-slate-200 transition flex items-center gap-1.5"
                 >
-                  <Database className="w-3.5 h-3.5 text-emerald-400" /> Browse Image (.img)...
+                  <Database className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>{language === 'en' ? 'Browse Image (.img)...' : 'Procurar Imagem (.img)...'}</span>
                 </button>
               </div>
             </div>
@@ -774,8 +836,10 @@ export default function App() {
             {/* Scrollable Device List Container with Min-H-0 */}
             <div className="flex-1 min-h-0 overflow-y-auto pr-3 space-y-2 border border-slate-800/80 rounded-xl p-3 bg-slate-950/40">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1 flex items-center justify-between">
-                <span>Logical Partitions & Volumes</span>
-                <span className="text-slate-500 text-[10px]">Click to select, double-click to advance</span>
+                <span>{language === 'en' ? 'Logical Partitions & Volumes' : 'Partições Lógicas & Volumes'}</span>
+                <span className="text-slate-500 text-[10px]">
+                  {language === 'en' ? 'Click to select, double-click to advance' : 'Clique para selecionar, duplo-clique para avançar'}
+                </span>
               </div>
               {devices.filter((d) => d.device_type === 'Volume').map((dev) => {
                 const isSelected = selectedSource?.id === dev.id;
@@ -801,13 +865,15 @@ export default function App() {
                       </div>
                     </div>
                     <div className="text-xs font-mono text-slate-300">
-                      {dev.size_bytes > 0 ? `${(dev.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB` : 'Available'}
+                      {dev.size_bytes > 0 ? `${(dev.size_bytes / (1024 * 1024 * 1024)).toFixed(1)} GB` : (language === 'en' ? 'Available' : 'Disponível')}
                     </div>
                   </div>
                 );
               })}
 
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-5 mb-1">Physical Hard Drives & SSDs</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-5 mb-1">
+                {language === 'en' ? 'Physical Hard Drives & SSDs' : 'Discos Físicos & SSDs'}
+              </div>
               {devices.filter((d) => d.device_type === 'PhysicalDrive').map((dev) => {
                 const isSelected = selectedSource?.id === dev.id;
                 return (
@@ -832,7 +898,7 @@ export default function App() {
                       </div>
                     </div>
                     <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                      Admin Elevation
+                      {language === 'en' ? 'Admin Elevation' : 'Requer Elevação'}
                     </span>
                   </div>
                 );
@@ -845,15 +911,18 @@ export default function App() {
                 onClick={() => setCurrentStep(0)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
               >
-                Back to Dashboard
+                {language === 'en' ? 'Back to Dashboard' : 'Voltar ao Início'}
               </button>
 
               <div className="flex items-center gap-4">
                 <span className="text-xs text-slate-400">
                   {selectedSource ? (
-                    <span className="text-slate-200 font-medium">Selected: <strong>{selectedSource.name}</strong></span>
+                    <span className="text-slate-200 font-medium">
+                      {language === 'en' ? 'Selected: ' : 'Selecionado: '}
+                      <strong>{selectedSource.name}</strong>
+                    </span>
                   ) : (
-                    'Select a drive to proceed'
+                    language === 'en' ? 'Select a drive to proceed' : 'Selecione uma unidade para continuar'
                   )}
                 </span>
                 <button
@@ -861,7 +930,8 @@ export default function App() {
                   onClick={() => setCurrentStep(2)}
                   className="px-6 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-2"
                 >
-                  Continue to Recovery Method <ArrowRight className="w-4 h-4" />
+                  {language === 'en' ? 'Continue to Recovery Method' : 'Continuar para Método de Recuperação'}{' '}
+                  <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
             </div>
@@ -871,8 +941,14 @@ export default function App() {
         {/* STEP 2: Select Method */}
         {currentStep === 2 && (
           <div className="flex-1 min-h-0 flex flex-col max-w-4xl mx-auto w-full">
-            <h2 className="text-xl font-bold mb-1">Step 2 — Select Recovery Method</h2>
-            <p className="text-xs text-slate-400 mb-6">Choose how OpenRe should analyze the selected media.</p>
+            <h2 className="text-xl font-bold mb-1">
+              {language === 'en' ? 'Step 2 — Select Recovery Method' : 'Etapa 2 — Selecionar Método de Recuperação'}
+            </h2>
+            <p className="text-xs text-slate-400 mb-6">
+              {language === 'en'
+                ? 'Choose how OpenRe should analyze the selected media.'
+                : 'Escolha como o OpenRe deve analisar a mídia selecionada.'}
+            </p>
 
             <div className="grid grid-cols-2 gap-4 mb-6">
               <div
@@ -886,11 +962,17 @@ export default function App() {
                 <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center mb-3">
                   <FileSearch className="w-4 h-4" />
                 </div>
-                <h3 className="font-semibold text-sm mb-1">Quick Scan (Filesystem Undelete)</h3>
+                <h3 className="font-semibold text-sm mb-1">
+                  {language === 'en' ? 'Quick Scan (Filesystem Undelete)' : 'Varredura Rápida (Restauração do Sistema de Arquivos)'}
+                </h3>
                 <p className="text-xs text-slate-400 mb-4 flex-1">
-                  Fastest option. Inspects NTFS ($MFT), FAT32, exFAT, and ext4 directory metadata to recover recently deleted files with original filenames, timestamps, and directories intact.
+                  {language === 'en'
+                    ? 'Fastest option. Inspects NTFS ($MFT), FAT32, exFAT, and ext4 directory metadata to recover recently deleted files with original filenames, timestamps, and directories intact.'
+                    : 'Opção mais rápida. Inspeciona metadados NTFS ($MFT), FAT32, exFAT e ext4 para restaurar arquivos excluídos recentemente mantendo nomes originais, datas e pastas intactos.'}
                 </p>
-                <div className="text-xs text-emerald-400 font-medium">✓ Preserves original file names & paths</div>
+                <div className="text-xs text-emerald-400 font-medium">
+                  {language === 'en' ? '✓ Preserves original file names & paths' : '✓ Preserva nomes e caminhos originais de arquivos'}
+                </div>
               </div>
 
               <div
@@ -904,11 +986,17 @@ export default function App() {
                 <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center mb-3">
                   <HardDrive className="w-4 h-4" />
                 </div>
-                <h3 className="font-semibold text-sm mb-1">Deep Scan (Signature Carving)</h3>
+                <h3 className="font-semibold text-sm mb-1">
+                  {language === 'en' ? 'Deep Scan (Signature Carving)' : 'Varredura Profunda (Escavação por Assinatura)'}
+                </h3>
                 <p className="text-xs text-slate-400 mb-4 flex-1">
-                  Examines raw sector blocks across the entire device. Detects file headers and chunk boundaries (JPEG, PNG, PDF, DOCX, ZIP, MP4) even on formatted or corrupted drives.
+                  {language === 'en'
+                    ? 'Examines raw sector blocks across the entire device. Detects file headers and chunk boundaries (JPEG, PNG, PDF, DOCX, ZIP, MP4) even on formatted or corrupted drives.'
+                    : 'Examina blocos de setores brutos por todo o dispositivo. Detecta cabeçalhos e limites de arquivos (JPEG, PNG, PDF, DOCX, ZIP, MP4) mesmo em discos formatados ou corrompidos.'}
                 </p>
-                <div className="text-xs text-indigo-400 font-medium">✓ Works on formatted or RAW partitions</div>
+                <div className="text-xs text-indigo-400 font-medium">
+                  {language === 'en' ? '✓ Works on formatted or RAW partitions' : '✓ Funciona em partições formatadas ou em modo RAW'}
+                </div>
               </div>
             </div>
 
@@ -917,13 +1005,13 @@ export default function App() {
                 onClick={() => setCurrentStep(1)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
               >
-                Back
+                {language === 'en' ? 'Back' : 'Voltar'}
               </button>
               <button
                 onClick={() => setCurrentStep(3)}
                 className="px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
               >
-                Continue to Filters <ArrowRight className="w-4 h-4" />
+                {language === 'en' ? 'Continue to Filters' : 'Continuar para Filtros'} <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </div>
@@ -932,17 +1020,23 @@ export default function App() {
         {/* STEP 3: Apply Filters */}
         {currentStep === 3 && (
           <div className="flex-1 min-h-0 flex flex-col max-w-4xl mx-auto w-full">
-            <h2 className="text-xl font-bold mb-1">Step 3 — Apply Search Filters</h2>
-            <p className="text-xs text-slate-400 mb-6">Select which file types you are looking to recover.</p>
+            <h2 className="text-xl font-bold mb-1">
+              {language === 'en' ? 'Step 3 — Apply Search Filters' : 'Etapa 3 — Aplicar Filtros de Busca'}
+            </h2>
+            <p className="text-xs text-slate-400 mb-6">
+              {language === 'en'
+                ? 'Select which file types you are looking to recover.'
+                : 'Selecione quais tipos de arquivos você deseja recuperar.'}
+            </p>
 
             <div className="grid grid-cols-3 gap-3 mb-8">
               {[
-                { label: 'Images', ext: 'JPG, PNG, GIF, WebP, BMP', key: 'Image', icon: ImageIcon },
-                { label: 'Documents', ext: 'PDF, DOCX, XLSX, PPTX', key: 'Document', icon: FileText },
-                { label: 'Videos', ext: 'MP4, MKV, MOV, AVI', key: 'Video', icon: Video },
-                { label: 'Audio', ext: 'MP3, WAV, FLAC', key: 'Audio', icon: Music },
-                { label: 'Archives', ext: 'ZIP, RAR, 7Z, TAR', key: 'Archive', icon: Archive },
-                { label: 'Code & Text', ext: 'TXT, JSON, MD, LOG', key: 'Text', icon: FileSearch },
+                { label: language === 'en' ? 'Images' : 'Imagens', ext: 'JPG, PNG, GIF, WebP, BMP', key: 'Image', icon: ImageIcon },
+                { label: language === 'en' ? 'Documents' : 'Documentos', ext: 'PDF, DOCX, XLSX, PPTX', key: 'Document', icon: FileText },
+                { label: language === 'en' ? 'Videos' : 'Vídeos', ext: 'MP4, MKV, MOV, AVI', key: 'Video', icon: Video },
+                { label: language === 'en' ? 'Audio' : 'Áudio', ext: 'MP3, WAV, FLAC', key: 'Audio', icon: Music },
+                { label: language === 'en' ? 'Archives' : 'Arquivos Compactados', ext: 'ZIP, RAR, 7Z, TAR', key: 'Archive', icon: Archive },
+                { label: language === 'en' ? 'Code & Text' : 'Código & Texto', ext: 'TXT, JSON, MD, LOG', key: 'Text', icon: FileSearch },
               ].map((item) => {
                 const isSelected = selectedCategories.includes(item.key);
                 const Icon = item.icon;
@@ -977,13 +1071,14 @@ export default function App() {
                 onClick={() => setCurrentStep(2)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
               >
-                Back
+                {language === 'en' ? 'Back' : 'Voltar'}
               </button>
               <button
                 onClick={handleStartScan}
                 className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition flex items-center gap-2"
               >
-                <Play className="w-4 h-4 fill-current" /> Start Scan Now
+                <Play className="w-4 h-4 fill-current" />{' '}
+                {language === 'en' ? 'Start Scan Now' : 'Iniciar Varredura Agora'}
               </button>
             </div>
           </div>
@@ -1087,7 +1182,7 @@ export default function App() {
 
                 <div className="w-full flex items-center justify-between text-xs text-slate-400 font-mono mb-8">
                   <span>{scanProgress.percent}%</span>
-                  <span>Speed: {scanProgress.speedMBps} MB/s</span>
+                  <span>{language === 'en' ? 'Speed:' : 'Velocidade:'} {scanProgress.speedMBps} MB/s</span>
                   <span>{language === 'en' ? 'Files Discovered' : 'Arquivos Encontrados'}: {scanProgress.filesCount}</span>
                 </div>
 
@@ -1152,7 +1247,7 @@ export default function App() {
 
               <div className="flex items-center gap-2">
                 <div className="text-xs text-slate-400 font-mono hidden md:block">
-                  <strong className="text-sky-400">{selectedFileIds.size}</strong> of {filteredFiles.length}
+                  <strong className="text-sky-400">{selectedFileIds.size}</strong> {language === 'en' ? 'of' : 'de'} {filteredFiles.length}
                 </div>
 
                 {/* Auto-Preview on Hover Toggle */}
@@ -1278,7 +1373,7 @@ export default function App() {
                               {file.filename}
                             </span>
                           </td>
-                          <td className="py-2 px-3 text-slate-400">{file.category}</td>
+                          <td className="py-2 px-3 text-slate-400">{getCategoryName(file.category)}</td>
                           <td className="py-2 px-3 text-slate-400 font-mono">
                             {(file.size_bytes / 1024).toFixed(1)} KB
                           </td>
@@ -1349,22 +1444,22 @@ export default function App() {
                           {file.category === 'Image' ? (
                             <div className="flex flex-col items-center text-slate-400 group-hover:text-sky-300 transition-colors">
                               <ImageIcon className="w-6 h-6 mb-1 opacity-80" />
-                              <span className="text-[10px] font-mono uppercase">{file.extension} Image</span>
+                              <span className="text-[10px] font-mono uppercase">{file.extension} {language === 'en' ? 'Image' : 'Imagem'}</span>
                             </div>
                           ) : file.category === 'Audio' ? (
                             <div className="flex flex-col items-center text-amber-400/80 group-hover:text-amber-300 transition-colors">
                               <Volume2 className="w-6 h-6 mb-1 opacity-80" />
-                              <span className="text-[10px] font-mono uppercase">{file.extension} Audio</span>
+                              <span className="text-[10px] font-mono uppercase">{file.extension} {language === 'en' ? 'Audio' : 'Áudio'}</span>
                             </div>
                           ) : file.category === 'Video' ? (
                             <div className="flex flex-col items-center text-purple-400/80 group-hover:text-purple-300 transition-colors">
                               <Video className="w-6 h-6 mb-1 opacity-80" />
-                              <span className="text-[10px] font-mono uppercase">{file.extension} Stream</span>
+                              <span className="text-[10px] font-mono uppercase">{file.extension} {language === 'en' ? 'Stream' : 'Vídeo'}</span>
                             </div>
                           ) : (
                             <div className="flex flex-col items-center text-slate-500 group-hover:text-slate-300 transition-colors">
                               <FileText className="w-6 h-6 mb-1 opacity-80" />
-                              <span className="text-[10px] font-mono uppercase">{file.extension || 'Data'}</span>
+                              <span className="text-[10px] font-mono uppercase">{file.extension || (language === 'en' ? 'Data' : 'Dados')}</span>
                             </div>
                           )}
                         </div>
@@ -1469,16 +1564,28 @@ export default function App() {
         {/* STEP 6: Recover Destination */}
         {currentStep === 6 && (
           <div className="flex-1 min-h-0 flex flex-col max-w-2xl mx-auto w-full justify-center">
-            <h2 className="text-2xl font-bold mb-2">Step 6 — Choose Destination Directory</h2>
-            <p className="text-xs text-slate-400 mb-6">Select a safe location to write the recovered files.</p>
+            <h2 className="text-2xl font-bold mb-2">
+              {language === 'en' ? 'Step 6 — Choose Destination Directory' : 'Etapa 6 — Escolher Diretório de Destino'}
+            </h2>
+            <p className="text-xs text-slate-400 mb-6">
+              {language === 'en'
+                ? 'Select a safe location to write the recovered files.'
+                : 'Selecione um local seguro para gravar os arquivos recuperados.'}
+            </p>
 
             <div className="p-4 rounded-xl border border-slate-800 bg-slate-900/60 mb-4">
-              <label className="text-xs font-semibold text-slate-300 block mb-2">Recovery Target Directory:</label>
+              <label className="text-xs font-semibold text-slate-300 block mb-2">
+                {language === 'en' ? 'Recovery Target Directory:' : 'Diretório de Destino da Recuperação:'}
+              </label>
               <div className="flex items-center gap-2">
                 <input
                   type="text"
                   readOnly
-                  placeholder="Click Browse to choose destination..."
+                  placeholder={
+                    language === 'en'
+                      ? 'Click Browse to choose destination...'
+                      : 'Clique em Procurar para escolher o destino...'
+                  }
                   value={destPath}
                   className="flex-1 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200 font-mono focus:outline-none"
                 />
@@ -1486,7 +1593,7 @@ export default function App() {
                   onClick={handleSelectDestFolder}
                   className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 transition flex items-center gap-1.5"
                 >
-                  <FolderOpen className="w-4 h-4" /> Browse
+                  <FolderOpen className="w-4 h-4" /> {language === 'en' ? 'Browse' : 'Procurar'}
                 </button>
               </div>
             </div>
@@ -1495,14 +1602,20 @@ export default function App() {
               <div className="p-4 rounded-xl border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs flex items-start gap-3 mb-6">
                 <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
                 <div>
-                  <div className="font-semibold mb-1">Overwriting Risk Detected!</div>
+                  <div className="font-semibold mb-1">
+                    {language === 'en' ? 'Overwriting Risk Detected!' : 'Risco de Sobrescrita Detectado!'}
+                  </div>
                   <div>{collisionWarning}</div>
                 </div>
               </div>
             ) : (
               <div className="p-3.5 rounded-lg border border-slate-800 bg-slate-900/40 text-slate-400 text-xs flex items-center gap-2 mb-6">
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                <span>Files will be written with SHA-256 validation. Existing files are never overwritten.</span>
+                <span>
+                  {language === 'en'
+                    ? 'Files will be written with SHA-256 validation. Existing files are never overwritten.'
+                    : 'Os arquivos serão gravados com validação SHA-256. Arquivos existentes nunca são sobrescritos.'}
+                </span>
               </div>
             )}
 
@@ -1511,14 +1624,15 @@ export default function App() {
                 onClick={() => setCurrentStep(5)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition"
               >
-                Back to Results
+                {language === 'en' ? 'Back to Results' : 'Voltar aos Resultados'}
               </button>
               <button
                 disabled={!destPath || (!!collisionWarning && enforceSeparation) || isRecovering}
                 onClick={handleStartRecovery}
                 className="px-6 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-xs font-semibold text-white shadow-lg shadow-emerald-600/25 transition flex items-center gap-2"
               >
-                <Download className="w-4 h-4" /> Start Recovery Process
+                <Download className="w-4 h-4" />{' '}
+                {language === 'en' ? 'Start Recovery Process' : 'Iniciar Processo de Recuperação'}
               </button>
             </div>
           </div>
@@ -1531,8 +1645,14 @@ export default function App() {
               <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto mb-3">
                 <CheckCircle2 className="w-6 h-6" />
               </div>
-              <h2 className="text-2xl font-bold">Recovery Completed Successfully</h2>
-              <p className="text-xs text-slate-400">All chosen files have been written to the destination directory.</p>
+              <h2 className="text-2xl font-bold">
+                {language === 'en' ? 'Recovery Completed Successfully' : 'Recuperação Concluída com Sucesso'}
+              </h2>
+              <p className="text-xs text-slate-400">
+                {language === 'en'
+                  ? 'All chosen files have been written to the destination directory.'
+                  : 'Todos os arquivos selecionados foram gravados no diretório de destino.'}
+              </p>
             </div>
 
             <div className="flex-1 min-h-0 bg-slate-900 rounded-xl border border-slate-800 p-4 font-mono text-xs overflow-y-auto mb-6 whitespace-pre-wrap text-slate-300">
@@ -1544,14 +1664,16 @@ export default function App() {
                 onClick={() => setCurrentStep(0)}
                 className="px-4 py-2 rounded-lg border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 transition flex items-center gap-1.5"
               >
-                <RotateCcw className="w-3.5 h-3.5" /> Start New Recovery
+                <RotateCcw className="w-3.5 h-3.5" />{' '}
+                {language === 'en' ? 'Start New Recovery' : 'Iniciar Nova Recuperação'}
               </button>
 
               <button
                 onClick={() => sendIpc('open_output_folder', { path: destPath })}
                 className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5"
               >
-                <FolderOpen className="w-4 h-4" /> Open Destination Folder
+                <FolderOpen className="w-4 h-4" />{' '}
+                {language === 'en' ? 'Open Destination Folder' : 'Abrir Pasta de Destino'}
               </button>
             </div>
           </div>
@@ -1764,7 +1886,7 @@ export default function App() {
                     </div>
                     <div className="text-xs font-semibold text-slate-200 mb-1">{previewFile.filename}</div>
                     <div className="text-[11px] text-slate-400 mb-3 font-mono">
-                      {previewFile.extension.toUpperCase()} Audio • {(previewFile.size_bytes / (1024 * 1024)).toFixed(2)} MB
+                      {previewFile.extension.toUpperCase()} {language === 'en' ? 'Audio' : 'Áudio'} • {(previewFile.size_bytes / (1024 * 1024)).toFixed(2)} MB
                     </div>
                     {!previewData ? (
                       <div className="py-4 text-center text-slate-400 flex flex-col items-center">
@@ -1808,7 +1930,7 @@ export default function App() {
                           preload="metadata"
                         />
                         <div className="w-full flex justify-between items-center text-[10px] text-slate-400 mt-2 font-mono px-1">
-                          <span className="text-purple-400 font-semibold">{previewFile.extension.toUpperCase()} Video</span>
+                          <span className="text-purple-400 font-semibold">{previewFile.extension.toUpperCase()} {language === 'en' ? 'Video' : 'Vídeo'}</span>
                           <span>{(previewFile.size_bytes / (1024 * 1024)).toFixed(2)} MB</span>
                         </div>
                       </div>
@@ -1951,30 +2073,56 @@ export default function App() {
 
                 {/* Metadata & Allocation */}
                 <div className="border border-slate-800 rounded-lg p-3 bg-slate-950/50">
-                  <div className="text-xs font-semibold text-slate-400 mb-2">Metadata & Allocation:</div>
+                  <div className="text-xs font-semibold text-slate-400 mb-2">
+                    {language === 'en' ? 'Metadata & Allocation:' : 'Metadados & Alocação:'}
+                  </div>
                   <div className="space-y-1.5 text-xs">
                     <div className="flex justify-between text-slate-400">
-                      <span>File Size:</span>
+                      <span>{language === 'en' ? 'File Size:' : 'Tamanho do Arquivo:'}</span>
                       <span className="font-mono text-slate-200">{previewFile.size_bytes.toLocaleString()} bytes ({(previewFile.size_bytes / 1024).toFixed(1)} KB)</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
-                      <span>Source Offset:</span>
+                      <span>{language === 'en' ? 'Source Offset:' : 'Offset de Origem:'}</span>
                       <span className="font-mono text-slate-200">0x{previewFile.source_offset.toString(16).toUpperCase()}</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
-                      <span>Category:</span>
-                      <span className="text-slate-200">{previewFile.category}</span>
+                      <span>{language === 'en' ? 'Category:' : 'Categoria:'}</span>
+                      <span className="text-slate-200">{getCategoryName(previewFile.category)}</span>
                     </div>
                     <div className="flex justify-between text-slate-400">
-                      <span>Integrity:</span>
+                      <span>{language === 'en' ? 'Integrity:' : 'Integridade:'}</span>
                       <span>{getIntegrityBadge(previewFile.integrity)}</span>
                     </div>
-                    {previewData?.metadata_entries && previewData.metadata_entries.map(([k, v], idx) => (
-                      <div key={idx} className="flex justify-between text-slate-400 pt-1 border-t border-slate-900">
-                        <span>{k}:</span>
-                        <span className="font-mono text-slate-300 text-right truncate max-w-[240px]">{v}</span>
-                      </div>
-                    ))}
+                    {previewData?.metadata_entries && previewData.metadata_entries.map(([k, v], idx) => {
+                      const translateMetaKey = (key: string) => {
+                        if (language !== 'pt') return key;
+                        const map: Record<string, string> = {
+                          'Format': 'Formato',
+                          'Dimensions': 'Dimensões',
+                          'Color Type': 'Tipo de Cor',
+                          'Container': 'Contêiner',
+                          'MIME Type': 'Tipo MIME',
+                          'Duration': 'Duração',
+                          'Bitrate': 'Taxa de Bits',
+                          'Sample Rate': 'Taxa de Amostragem',
+                          'Channels': 'Canais',
+                          'Codec': 'Codec',
+                          'Page Count': 'Qtd. de Páginas',
+                          'Author': 'Autor',
+                          'Created': 'Criado em',
+                          'Modified': 'Modificado em',
+                          'Size': 'Tamanho',
+                          'Type': 'Tipo',
+                        };
+                        return map[key] || key;
+                      };
+                      return (
+                        <div key={idx} className="flex justify-between text-slate-400 pt-1 border-t border-slate-900">
+                          <span>{translateMetaKey(k)}:</span>
+                          <span className="font-mono text-slate-300 text-right truncate max-w-[240px]">{v}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </>
@@ -2011,7 +2159,7 @@ export default function App() {
                 {previewData?.hex_dump && previewData.hex_dump.length > 0 ? (
                   <div className="border border-slate-800 rounded-lg p-3 bg-slate-950 font-mono text-[11px] overflow-x-auto select-text cursor-text">
                     <div className="flex items-center justify-between text-slate-400 font-semibold mb-2 select-none">
-                      <span>Sector Hex Dump:</span>
+                      <span>{language === 'en' ? 'Sector Hex Dump:' : 'Dump Hexadecimal do Setor:'}</span>
                       <span className="text-[10px] text-slate-500 font-normal">
                         {language === 'en' ? '(Selectable text — drag to highlight & copy)' : '(Texto selecionável — arraste para marcar e copiar)'}
                       </span>
@@ -2045,8 +2193,8 @@ export default function App() {
                   <Sliders className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-base">OpenRe Preferences & Safety</h3>
-                  <div className="text-[11px] text-slate-400">Configure recovery engine behavior</div>
+                  <h3 className="font-bold text-base">{language === 'en' ? 'OpenRe Preferences & Safety' : 'Preferências & Segurança do OpenRe'}</h3>
+                  <div className="text-[11px] text-slate-400">{language === 'en' ? 'Configure recovery engine behavior' : 'Configurar comportamento do motor de recuperação'}</div>
                 </div>
               </div>
               <button onClick={() => setShowSettings(false)} className="text-slate-400 hover:text-slate-100 p-1">
@@ -2080,8 +2228,8 @@ export default function App() {
 
               {/* Stride selection */}
               <div>
-                <label className="font-semibold text-slate-300 block mb-1">Deep Carving Stride</label>
-                <p className="text-[11px] text-slate-400 mb-2">Block boundary alignment when searching raw disk sectors.</p>
+                <label className="font-semibold text-slate-300 block mb-1">{language === 'en' ? 'Deep Carving Stride' : 'Passo da Escavação Profunda (Stride)'}</label>
+                <p className="text-[11px] text-slate-400 mb-2">{language === 'en' ? 'Block boundary alignment when searching raw disk sectors.' : 'Alinhamento dos limites de blocos ao escanear setores brutos do disco.'}</p>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => setScanStride(512)}
@@ -2089,8 +2237,8 @@ export default function App() {
                       scanStride === 512 ? 'border-sky-500 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
                     }`}
                   >
-                    <div className="font-semibold text-xs">512 Bytes (Recommended)</div>
-                    <div className="text-[10px] text-slate-400">Maximum forensic sensitivity</div>
+                    <div className="font-semibold text-xs">{language === 'en' ? '512 Bytes (Recommended)' : '512 Bytes (Recomendado)'}</div>
+                    <div className="text-[10px] text-slate-400">{language === 'en' ? 'Maximum forensic sensitivity' : 'Sensibilidade forense máxima'}</div>
                   </button>
                   <button
                     onClick={() => setScanStride(4096)}
@@ -2098,8 +2246,8 @@ export default function App() {
                       scanStride === 4096 ? 'border-sky-500 bg-sky-500/15 text-white' : 'border-slate-800 bg-slate-950 text-slate-400'
                     }`}
                   >
-                    <div className="font-semibold text-xs">4096 Bytes (Fast)</div>
-                    <div className="text-[10px] text-slate-400">4K cluster alignment</div>
+                    <div className="font-semibold text-xs">{language === 'en' ? '4096 Bytes (Fast)' : '4096 Bytes (Rápido)'}</div>
+                    <div className="text-[10px] text-slate-400">{language === 'en' ? '4K cluster alignment' : 'Alinhamento de cluster 4K'}</div>
                   </button>
                 </div>
               </div>
@@ -2108,8 +2256,8 @@ export default function App() {
               <div className="space-y-3 pt-2 border-t border-slate-800">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="font-semibold text-slate-300">Prevent Same-Device Recovery</div>
-                    <div className="text-[11px] text-slate-400">Blocks saving files onto the scanned drive to avoid overwriting.</div>
+                    <div className="font-semibold text-slate-300">{language === 'en' ? 'Prevent Same-Device Recovery' : 'Bloquear Recuperação na Mesma Unidade'}</div>
+                    <div className="text-[11px] text-slate-400">{language === 'en' ? 'Blocks saving files onto the scanned drive to avoid overwriting.' : 'Impede salvar arquivos no mesmo disco varrido para evitar sobrescrita.'}</div>
                   </div>
                   <input
                     type="checkbox"
@@ -2121,8 +2269,8 @@ export default function App() {
 
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="font-semibold text-slate-300">Auto-Detect Truncated JPEG/PNG</div>
-                    <div className="text-[11px] text-slate-400">Enables one-click repair copy button for missing EOI/CRC markers.</div>
+                    <div className="font-semibold text-slate-300">{language === 'en' ? 'Auto-Detect Truncated JPEG/PNG' : 'Auto-detectar JPEG/PNG Truncados'}</div>
+                    <div className="text-[11px] text-slate-400">{language === 'en' ? 'Enables one-click repair copy button for missing EOI/CRC markers.' : 'Habilita botão de cópia com reparo para marcadores EOI/CRC ausentes.'}</div>
                   </div>
                   <input
                     type="checkbox"
@@ -2136,7 +2284,7 @@ export default function App() {
               {/* Buffer Size */}
               <div className="pt-2 border-t border-slate-800">
                 <div className="flex justify-between items-center mb-1">
-                  <label className="font-semibold text-slate-300">Sliding Window Buffer Size</label>
+                  <label className="font-semibold text-slate-300">{language === 'en' ? 'Sliding Window Buffer Size' : 'Tamanho do Buffer da Janela Deslizante'}</label>
                   <span className="font-mono text-sky-400 font-bold">{maxBufferSizeMb} MB</span>
                 </div>
                 <input
@@ -2178,7 +2326,7 @@ export default function App() {
                 onClick={() => setShowSettings(false)}
                 className="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-xs font-semibold text-white shadow-md transition"
               >
-                Save & Close
+                {language === 'en' ? 'Save & Close' : 'Salvar & Fechar'}
               </button>
             </div>
           </div>
@@ -2192,26 +2340,28 @@ export default function App() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-sky-600 flex items-center justify-center font-bold text-white">Re</div>
-                <h3 className="font-bold text-base">About OpenRe</h3>
+                <h3 className="font-bold text-base">{language === 'en' ? 'About OpenRe' : 'Sobre o OpenRe'}</h3>
               </div>
               <button onClick={() => setShowAbout(false)} className="text-slate-400 hover:text-slate-100">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-              OpenRe is an open-source, privacy-first desktop application for deleted file recovery, disk carving, and forensic file inspection.
+              {language === 'en'
+                ? 'OpenRe is an open-source, privacy-first desktop application for deleted file recovery, disk carving, and forensic file inspection.'
+                : 'O OpenRe é um aplicativo desktop de código aberto focado em privacidade para recuperação de arquivos deletados, escavação de disco e inspeção forense.'}
             </p>
             <div className="text-xs space-y-2 border-t border-slate-800 pt-4 text-slate-300">
-              <div><strong>License:</strong> MIT Open Source</div>
-              <div><strong>Core Engine:</strong> Rust 2021 (Memory-Safe)</div>
-              <div><strong>Privacy:</strong> 100% Offline (Zero telemetry)</div>
-              <div><strong>Portuguese Guide:</strong> docs/installation/INSTALLATION_PT_BR.md</div>
+              <div><strong>{language === 'en' ? 'License:' : 'Licença:'}</strong> MIT Open Source</div>
+              <div><strong>{language === 'en' ? 'Core Engine:' : 'Motor Principal:'}</strong> Rust 2021 (Memory-Safe)</div>
+              <div><strong>{language === 'en' ? 'Privacy:' : 'Privacidade:'}</strong> {language === 'en' ? '100% Offline (Zero telemetry)' : '100% Offline (Zero telemetria)'}</div>
+              <div><strong>{language === 'en' ? 'Portuguese Guide:' : 'Guia em Português:'}</strong> docs/installation/INSTALLATION_PT_BR.md</div>
             </div>
             <button
               onClick={() => setShowAbout(false)}
               className="mt-6 w-full py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition"
             >
-              Close
+              {language === 'en' ? 'Close' : 'Fechar'}
             </button>
           </div>
         </div>

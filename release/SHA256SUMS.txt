@@ -1,6 +1,3 @@
-﻿
-Algorithm       Hash                                                                   Path                            
----------       ----                                                                   ----                            
-SHA256          A1F93F7EEC682EEAFC395C4831BF70ECB46C5F9FC7FB332CA3B73CDE714B08A4       C:\Users\Mateus\Desktop\OpenR...
-
-
+﻿efdf9d1f92f46591c83b6ed7b83b3fc98649cc17de95877a94007a386e6e85c3  OpenRe-Windows-x64-Portable.zip
+90362ce553c6646315f8fbf2be9db6f94379ed292a34ec6cd762c68c91d88515  OpenRe.exe
+c514be92957782d3c658a8d050efd48ca3fc2b3c463fa40a246e0bd04af93408  openre-cli.exe
