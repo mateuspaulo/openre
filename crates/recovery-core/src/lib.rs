@@ -50,6 +50,18 @@ pub enum FileCategory {
 }
 
 impl FileCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FileCategory::Image => "Image",
+            FileCategory::Document => "Document",
+            FileCategory::Video => "Video",
+            FileCategory::Audio => "Audio",
+            FileCategory::Archive => "Archive",
+            FileCategory::Text => "Text",
+            FileCategory::Other => "Other",
+        }
+    }
+
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
             "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "tiff" | "tif" | "ico" | "raw" => {

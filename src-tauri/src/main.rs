@@ -255,8 +255,20 @@ fn handle_ipc_message(
                 match files_res {
                     Ok(files) => {
                         let count = files.len();
+                        let total_bytes: u64 = files.iter().map(|f| f.size_bytes).sum();
+                        let mut cat_counts = serde_json::Map::new();
+                        for f in &files {
+                            let cat_str = f.category.as_str();
+                            let c = cat_counts.entry(cat_str).or_insert(serde_json::Value::from(0));
+                            if let Some(n) = c.as_i64() {
+                                *c = serde_json::Value::from(n + 1);
+                            }
+                        }
+
+                        let initial_page: Vec<RecoveredFile> = files.iter().take(20).cloned().collect();
+
                         if let Ok(mut st) = state_clone.lock() {
-                            st.last_discovered = files.clone();
+                            st.last_discovered = files;
                         }
                         emit_log(
                             "success",
@@ -265,7 +277,13 @@ fn handle_ipc_message(
                         );
                         emit_event(
                             "scan_completed",
-                            &serde_json::json!({ "files": files }).to_string(),
+                            &serde_json::json!({
+                                "total_files": count,
+                                "total_bytes": total_bytes,
+                                "category_counts": cat_counts,
+                                "initial_page": initial_page,
+                                "files": initial_page
+                            }).to_string(),
                             &proxy_clone,
                         );
                     }
@@ -275,10 +293,27 @@ fn handle_ipc_message(
                             .map(|st| st.last_discovered.clone())
                             .unwrap_or_default();
                         let count = preserved_files.len();
+                        let total_bytes: u64 = preserved_files.iter().map(|f| f.size_bytes).sum();
+                        let mut cat_counts = serde_json::Map::new();
+                        for f in &preserved_files {
+                            let cat_str = f.category.as_str();
+                            let c = cat_counts.entry(cat_str).or_insert(serde_json::Value::from(0));
+                            if let Some(n) = c.as_i64() {
+                                *c = serde_json::Value::from(n + 1);
+                            }
+                        }
+                        let initial_page: Vec<RecoveredFile> = preserved_files.iter().take(20).cloned().collect();
+
                         emit_log("info", &format!("Scan stopped by user. Preserved {} files discovered so far.", count), &proxy_clone);
                         emit_event(
                             "scan_completed",
-                            &serde_json::json!({ "files": preserved_files }).to_string(),
+                            &serde_json::json!({
+                                "total_files": count,
+                                "total_bytes": total_bytes,
+                                "category_counts": cat_counts,
+                                "initial_page": initial_page,
+                                "files": initial_page
+                            }).to_string(),
                             &proxy_clone,
                         );
                     }
@@ -409,6 +444,71 @@ fn handle_ipc_message(
             let resp = serde_json::json!({ "thumbnails": results });
             emit_response(msg_id, &resp.to_string(), proxy);
         }
+        "get_files_page" => {
+            let page = msg.payload.get("page").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            let page_size = msg.payload.get("page_size").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+            let category_filter = msg.payload.get("category").and_then(|v| v.as_str()).unwrap_or("All");
+            let search = msg.payload.get("search").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();
+
+            let page = page.max(1);
+            let page_size = page_size.max(1);
+
+            if let Ok(st) = state.lock() {
+                let mut cat_counts = serde_json::Map::new();
+                for f in &st.last_discovered {
+                    let cat_str = f.category.as_str();
+                    let c = cat_counts.entry(cat_str).or_insert(serde_json::Value::from(0));
+                    if let Some(n) = c.as_i64() {
+                        *c = serde_json::Value::from(n + 1);
+                    }
+                }
+
+                let filtered: Vec<&RecoveredFile> = st.last_discovered.iter().filter(|f| {
+                    let matches_cat = category_filter == "All" || f.category.as_str().eq_ignore_ascii_case(category_filter);
+                    if !matches_cat {
+                        return false;
+                    }
+                    if search.is_empty() {
+                        return true;
+                    }
+                    f.filename.to_lowercase().contains(&search) || f.extension.to_lowercase().contains(&search)
+                }).collect();
+
+                let total_items = filtered.len();
+                let total_pages = if total_items == 0 { 1 } else { (total_items + page_size - 1) / page_size };
+                let safe_page = page.min(total_pages);
+                let start_idx = (safe_page - 1) * page_size;
+
+                let page_items: Vec<RecoveredFile> = filtered
+                    .into_iter()
+                    .skip(start_idx)
+                    .take(page_size)
+                    .cloned()
+                    .collect();
+
+                let resp = serde_json::json!({
+                    "items": page_items,
+                    "page": safe_page,
+                    "page_size": page_size,
+                    "total_items": total_items,
+                    "total_pages": total_pages,
+                    "total_discovered": st.last_discovered.len(),
+                    "category_counts": cat_counts
+                });
+                emit_response(msg_id, &resp.to_string(), proxy);
+            } else {
+                let resp = serde_json::json!({
+                    "items": [],
+                    "page": 1,
+                    "page_size": page_size,
+                    "total_items": 0,
+                    "total_pages": 1,
+                    "total_discovered": 0,
+                    "category_counts": {}
+                });
+                emit_response(msg_id, &resp.to_string(), proxy);
+            }
+        }
         "repair_file" => {
             let source_id = msg.payload.get("source_id").and_then(|v| v.as_str()).unwrap_or_default();
             let offset = msg.payload.get("source_offset").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -532,9 +632,43 @@ fn handle_ipc_message(
         "recover_files" => {
             let source_id = msg.payload.get("source_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
             let dest_path = msg.payload.get("destination_path").and_then(|v| v.as_str()).unwrap_or_default().to_string();
-            let files_val = msg.payload.get("files").cloned().unwrap_or(serde_json::Value::Null);
 
-            let files: Vec<RecoveredFile> = serde_json::from_value(files_val).unwrap_or_default();
+            let select_all = msg.payload.get("select_all").and_then(|v| v.as_bool()).unwrap_or(false);
+            let excluded_ids: std::collections::HashSet<String> = msg.payload.get("excluded_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let included_ids: std::collections::HashSet<String> = msg.payload.get("included_ids")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+                .unwrap_or_default();
+            let category_filter = msg.payload.get("category").and_then(|v| v.as_str()).unwrap_or("All");
+            let search_query = msg.payload.get("search").and_then(|v| v.as_str()).unwrap_or("").trim().to_lowercase();
+
+            let files_val = msg.payload.get("files").cloned().unwrap_or(serde_json::Value::Null);
+            let direct_files: Vec<RecoveredFile> = serde_json::from_value(files_val).unwrap_or_default();
+
+            let files: Vec<RecoveredFile> = if !direct_files.is_empty() {
+                direct_files
+            } else if let Ok(st) = state.lock() {
+                if select_all {
+                    st.last_discovered.iter().filter(|f| {
+                        let matches_cat = category_filter == "All" || f.category.as_str().eq_ignore_ascii_case(category_filter);
+                        if !matches_cat {
+                            return false;
+                        }
+                        if !search_query.is_empty() && !f.filename.to_lowercase().contains(&search_query) && !f.extension.to_lowercase().contains(&search_query) {
+                            return false;
+                        }
+                        !excluded_ids.contains(&f.id)
+                    }).cloned().collect()
+                } else {
+                    st.last_discovered.iter().filter(|f| included_ids.contains(&f.id)).cloned().collect()
+                }
+            } else {
+                Vec::new()
+            };
+
             let cancel = CancellationToken::new();
 
             emit_log(

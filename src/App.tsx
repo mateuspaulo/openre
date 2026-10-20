@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   HardDrive,
   FileSearch,
@@ -130,12 +130,20 @@ export default function App() {
     filesCount: 0,
     currentLabel: 'Ready',
   });
-  const [discoveredFiles, setDiscoveredFiles] = useState<RecoveredFile[]>([]);
-  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
-
-  // Pagination state
+  // Indexed catalog pagination state (server/backend indexed like database)
+  const [paginatedFiles, setPaginatedFiles] = useState<RecoveredFile[]>([]);
+  const [totalItems, setTotalItems] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [totalDiscoveredCount, setTotalDiscoveredCount] = useState<number>(0);
+  const [categoryCounts, setCategoryCounts] = useState<Record<string, number>>({});
   const [pageSize, setPageSize] = useState<number>(50);
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [isLoadingPage, setIsLoadingPage] = useState<boolean>(false);
+
+  // Scalable selection state (O(1) memory for up to 1,000,000 files)
+  const [selectionMode, setSelectionMode] = useState<'all' | 'custom'>('all');
+  const [deselectedFileIds, setDeselectedFileIds] = useState<Set<string>>(new Set());
+  const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(new Set());
 
   // Preview Drawer tab ('media' | 'hex')
   const [previewTab, setPreviewTab] = useState<'media' | 'hex'>('media');
@@ -301,34 +309,45 @@ export default function App() {
       } else if (type === 'scan_completed') {
         setIsScanning(false);
         setScanError(null);
-        const filesList = Array.isArray(payload.files) ? payload.files : [];
-        setPreparingCount(filesList.length);
+        const count = payload.total_files ?? (payload.files?.length || 0);
+        const initialItems: RecoveredFile[] = payload.initial_page ?? (payload.files?.slice(0, 50) || []);
+        setPreparingCount(count);
         setIsPreparingResults(true);
         setCurrentStep(5);
 
         appendLog(
           'info',
           language === 'en'
-            ? `Scan finalized. Structuring and indexing catalog for ${filesList.length} files...`
-            : `Varredura finalizada. Estruturando e indexando catálogo para ${filesList.length} arquivos...`
+            ? `Scan finalized. Structuring and indexing catalog for ${count.toLocaleString()} files...`
+            : `Varredura finalizada. Estruturando e indexando catálogo para ${count.toLocaleString()} arquivos...`
         );
 
+        setPaginatedFiles(initialItems);
+        setTotalItems(count);
+        setTotalDiscoveredCount(count);
+        setTotalPages(Math.max(1, Math.ceil(count / pageSize)));
+        setCurrentPage(1);
+        if (payload.category_counts) {
+          setCategoryCounts(payload.category_counts);
+        }
+
+        setSelectionMode('all');
+        setDeselectedFileIds(new Set());
+        setSelectedFileIds(new Set());
+
+        if (initialItems.length > 0) {
+          openPreview(initialItems[0]);
+        }
+
         setTimeout(() => {
-          setDiscoveredFiles(filesList);
-          setSelectedFileIds(new Set(filesList.map((f: any) => f.id)));
-          if (filesList.length > 0) {
-            openPreview(filesList[0]);
-          }
-          setTimeout(() => {
-            setIsPreparingResults(false);
-            appendLog(
-              'success',
-              language === 'en'
-                ? `Catalog ready. Displaying ${filesList.length} recoverable items.`
-                : `Catálogo pronto. Exibindo ${filesList.length} itens recuperáveis.`
-            );
-          }, 850);
-        }, 200);
+          setIsPreparingResults(false);
+          appendLog(
+            'success',
+            language === 'en'
+              ? `Catalog ready. Indexed ${count.toLocaleString()} recoverable items from storage.`
+              : `Catálogo pronto. Indexados ${count.toLocaleString()} arquivos recuperáveis do armazenamento.`
+          );
+        }, 300);
       } else if (type === 'scan_error') {
         setIsScanning(false);
         setScanError(payload.error || 'Scan stopped due to an error.');
@@ -346,6 +365,15 @@ export default function App() {
 
   const handleStartScan = () => {
     if (!selectedSource) return;
+    setPaginatedFiles([]);
+    setTotalItems(0);
+    setTotalPages(1);
+    setCurrentPage(1);
+    setTotalDiscoveredCount(0);
+    setCategoryCounts({});
+    setSelectionMode('all');
+    setDeselectedFileIds(new Set());
+    setSelectedFileIds(new Set());
     setImageThumbnails({});
     requestedThumbnailsRef.current.clear();
     setIsScanning(true);
@@ -407,12 +435,15 @@ export default function App() {
   const handleStartRecovery = async () => {
     if (!destPath || (collisionWarning && enforceSeparation)) return;
     setIsRecovering(true);
-    const targetFiles = discoveredFiles.filter((f) => selectedFileIds.has(f.id));
 
     const res = await sendIpc('recover_files', {
       source_id: selectedSource?.id,
-      files: targetFiles,
       destination_path: destPath,
+      select_all: selectionMode === 'all',
+      excluded_ids: Array.from(deselectedFileIds),
+      included_ids: Array.from(selectedFileIds),
+      category: filterCategory,
+      search: searchQuery,
     });
 
     setIsRecovering(false);
@@ -480,48 +511,124 @@ export default function App() {
     setTimeout(() => setCopiedHex(false), 2000);
   };
 
-  const filteredFiles = discoveredFiles.filter((f) => {
-    const matchCat = filterCategory === 'All' || f.category === filterCategory;
-    const matchSearch =
-      searchQuery === '' ||
-      f.filename.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      f.extension.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchCat && matchSearch;
-  });
+  // Indexed catalog fetch from backend (acting like database with page, limit, offset)
+  const fetchCatalogPage = useCallback(
+    async (page: number, size: number, category: string, search: string) => {
+      setIsLoadingPage(true);
+      try {
+        const res = await sendIpc('get_files_page', {
+          page,
+          page_size: size,
+          category,
+          search,
+        });
 
-  // Reset to page 1 when query, category, or page size changes
+        if (res) {
+          setPaginatedFiles(res.items || []);
+          setTotalItems(res.total_items ?? 0);
+          setTotalPages(Math.max(1, res.total_pages || 1));
+          setCurrentPage(res.page || page);
+          if (res.total_discovered !== undefined) {
+            setTotalDiscoveredCount(res.total_discovered);
+          }
+          if (res.category_counts) {
+            setCategoryCounts(res.category_counts);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch catalog page:', err);
+      } finally {
+        setIsLoadingPage(false);
+      }
+    },
+    []
+  );
+
+  // Fetch page when page, pageSize, or filterCategory changes
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery, filterCategory, pageSize]);
+    if (currentStep !== 5 || isPreparingResults) return;
+    fetchCatalogPage(currentPage, pageSize, filterCategory, searchQuery);
+  }, [currentPage, pageSize, filterCategory]);
 
-  // Pagination computations
-  const totalItems = filteredFiles.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const safeCurrentPage = Math.min(Math.max(1, currentPage), totalPages);
-  const startIndex = (safeCurrentPage - 1) * pageSize;
-  const endIndex = Math.min(startIndex + pageSize, totalItems);
-  const paginatedFiles = filteredFiles.slice(startIndex, endIndex);
+  // Debounced fetch for search query changes
+  useEffect(() => {
+    if (currentStep !== 5 || isPreparingResults) return;
+    const timer = setTimeout(() => {
+      setCurrentPage(1);
+      fetchCatalogPage(1, pageSize, filterCategory, searchQuery);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Range and selection computations
+  const safeCurrentPage = Math.min(Math.max(1, currentPage), Math.max(1, totalPages));
+  const startIndex = totalItems > 0 ? (safeCurrentPage - 1) * pageSize : 0;
+  const endIndex = Math.min(startIndex + paginatedFiles.length, totalItems);
+
+  const isFileSelected = (id: string) => {
+    if (selectionMode === 'all') {
+      return !deselectedFileIds.has(id);
+    }
+    return selectedFileIds.has(id);
+  };
+
+  const selectedCount =
+    selectionMode === 'all'
+      ? Math.max(0, totalItems - deselectedFileIds.size)
+      : selectedFileIds.size;
 
   const isPageFullySelected =
-    paginatedFiles.length > 0 && paginatedFiles.every((f) => selectedFileIds.has(f.id));
-  const isAllFullySelected =
-    filteredFiles.length > 0 && filteredFiles.every((f) => selectedFileIds.has(f.id));
+    paginatedFiles.length > 0 && paginatedFiles.every((f) => isFileSelected(f.id));
+
+  const isAllFullySelected = selectionMode === 'all' && deselectedFileIds.size === 0;
 
   const toggleSelectPage = () => {
-    const next = new Set(selectedFileIds);
     if (isPageFullySelected) {
-      paginatedFiles.forEach((f) => next.delete(f.id));
+      if (selectionMode === 'all') {
+        const next = new Set(deselectedFileIds);
+        paginatedFiles.forEach((f) => next.add(f.id));
+        setDeselectedFileIds(next);
+      } else {
+        const next = new Set(selectedFileIds);
+        paginatedFiles.forEach((f) => next.delete(f.id));
+        setSelectedFileIds(next);
+      }
     } else {
-      paginatedFiles.forEach((f) => next.add(f.id));
+      if (selectionMode === 'all') {
+        const next = new Set(deselectedFileIds);
+        paginatedFiles.forEach((f) => next.delete(f.id));
+        setDeselectedFileIds(next);
+      } else {
+        const next = new Set(selectedFileIds);
+        paginatedFiles.forEach((f) => next.delete(f.id));
+        setSelectedFileIds(next);
+      }
     }
-    setSelectedFileIds(next);
   };
 
   const toggleSelectAllFiltered = () => {
     if (isAllFullySelected) {
+      setSelectionMode('custom');
       setSelectedFileIds(new Set());
+      setDeselectedFileIds(new Set());
     } else {
-      setSelectedFileIds(new Set(filteredFiles.map((f) => f.id)));
+      setSelectionMode('all');
+      setDeselectedFileIds(new Set());
+      setSelectedFileIds(new Set());
+    }
+  };
+
+  const toggleSingleFile = (id: string) => {
+    if (selectionMode === 'all') {
+      const next = new Set(deselectedFileIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setDeselectedFileIds(next);
+    } else {
+      const next = new Set(selectedFileIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      setSelectedFileIds(next);
     }
   };
 
@@ -1282,16 +1389,33 @@ export default function App() {
 
                 <select
                   value={filterCategory}
-                  onChange={(e) => setFilterCategory(e.target.value)}
+                  onChange={(e) => {
+                    setFilterCategory(e.target.value);
+                    setCurrentPage(1);
+                  }}
                   className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
                 >
-                  <option value="All">{language === 'en' ? 'All Categories' : 'Todas Categorias'}</option>
-                  <option value="Image">{language === 'en' ? 'Images' : 'Imagens'}</option>
-                  <option value="Document">{language === 'en' ? 'Documents' : 'Documentos'}</option>
-                  <option value="Video">{language === 'en' ? 'Videos' : 'Vídeos'}</option>
-                  <option value="Audio">{language === 'en' ? 'Audio' : 'Áudio'}</option>
-                  <option value="Archive">{language === 'en' ? 'Archives' : 'Arquivos Compactados'}</option>
-                  <option value="Text">{language === 'en' ? 'Text' : 'Texto'}</option>
+                  <option value="All">
+                    {language === 'en' ? 'All Categories' : 'Todas Categorias'}{totalDiscoveredCount > 0 ? ` (${totalDiscoveredCount.toLocaleString()})` : ''}
+                  </option>
+                  <option value="Image">
+                    {language === 'en' ? 'Images' : 'Imagens'}{categoryCounts['Image'] !== undefined ? ` (${categoryCounts['Image'].toLocaleString()})` : ''}
+                  </option>
+                  <option value="Document">
+                    {language === 'en' ? 'Documents' : 'Documentos'}{categoryCounts['Document'] !== undefined ? ` (${categoryCounts['Document'].toLocaleString()})` : ''}
+                  </option>
+                  <option value="Video">
+                    {language === 'en' ? 'Videos' : 'Vídeos'}{categoryCounts['Video'] !== undefined ? ` (${categoryCounts['Video'].toLocaleString()})` : ''}
+                  </option>
+                  <option value="Audio">
+                    {language === 'en' ? 'Audio' : 'Áudio'}{categoryCounts['Audio'] !== undefined ? ` (${categoryCounts['Audio'].toLocaleString()})` : ''}
+                  </option>
+                  <option value="Archive">
+                    {language === 'en' ? 'Archives' : 'Arquivos Compactados'}{categoryCounts['Archive'] !== undefined ? ` (${categoryCounts['Archive'].toLocaleString()})` : ''}
+                  </option>
+                  <option value="Text">
+                    {language === 'en' ? 'Text' : 'Texto'}{categoryCounts['Text'] !== undefined ? ` (${categoryCounts['Text'].toLocaleString()})` : ''}
+                  </option>
                 </select>
 
                 <div className="flex items-center gap-1.5 ml-1">
@@ -1316,7 +1440,7 @@ export default function App() {
 
               <div className="flex items-center gap-2">
                 <div className="text-xs text-slate-400 font-mono hidden md:block">
-                  <strong className="text-sky-400">{selectedFileIds.size}</strong> {language === 'en' ? 'of' : 'de'} {filteredFiles.length}
+                  <strong className="text-sky-400">{selectedCount.toLocaleString()}</strong> {language === 'en' ? 'of' : 'de'} {totalItems.toLocaleString()}
                 </div>
 
                 {/* View Mode Toggle */}
@@ -1342,10 +1466,10 @@ export default function App() {
                     setPreviewFile(null);
                     setCurrentStep(6);
                   }}
-                  disabled={selectedFileIds.size === 0}
+                  disabled={selectedCount === 0}
                   className="px-4 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-xs font-semibold text-white shadow-md shadow-sky-600/25 transition flex items-center gap-1.5 shrink-0"
                 >
-                  {language === 'en' ? 'Proceed to Recover' : 'Avançar para Recuperação'} ({selectedFileIds.size}) <ArrowRight className="w-3.5 h-3.5" />
+                  {language === 'en' ? 'Proceed to Recover' : 'Avançar para Recuperação'} ({selectedCount.toLocaleString()}) <ArrowRight className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
@@ -1384,7 +1508,7 @@ export default function App() {
                   </thead>
                   <tbody className="divide-y divide-slate-850">
                     {paginatedFiles.map((file) => {
-                      const isSelected = selectedFileIds.has(file.id);
+                      const isSelected = isFileSelected(file.id);
                       const isCurrentPreview = previewFile?.id === file.id;
 
                       return (
@@ -1406,12 +1530,7 @@ export default function App() {
                             <input
                               type="checkbox"
                               checked={isSelected}
-                              onChange={(e) => {
-                                const next = new Set(selectedFileIds);
-                                if (e.target.checked) next.add(file.id);
-                                else next.delete(file.id);
-                                setSelectedFileIds(next);
-                              }}
+                              onChange={() => toggleSingleFile(file.id)}
                               className="cursor-pointer"
                             />
                           </td>
@@ -1459,7 +1578,7 @@ export default function App() {
               ) : (
                 <div className={`grid gap-3 p-1 ${previewFile ? 'grid-cols-2 md:grid-cols-3' : 'grid-cols-2 md:grid-cols-4'}`}>
                   {paginatedFiles.map((file) => {
-                    const isSelected = selectedFileIds.has(file.id);
+                    const isSelected = isFileSelected(file.id);
                     const isCurrentPreview = previewFile?.id === file.id;
 
                     return (
@@ -1482,12 +1601,7 @@ export default function App() {
                             <input
                               type="checkbox"
                               checked={isSelected}
-                              onChange={(e) => {
-                                const next = new Set(selectedFileIds);
-                                if (e.target.checked) next.add(file.id);
-                                else next.delete(file.id);
-                                setSelectedFileIds(next);
-                              }}
+                              onChange={() => toggleSingleFile(file.id)}
                               className="cursor-pointer"
                             />
                             {getCategoryIcon(file.category)}
@@ -1566,10 +1680,13 @@ export default function App() {
                 <span className="text-slate-500 text-[11px] mr-1">
                   {language === 'en' ? 'Per page:' : 'Por página:'}
                 </span>
-                {[20, 50, 100, 200, 300].map((size) => (
+                {[20, 50, 100, 200, 330].map((size) => (
                   <button
                     key={size}
-                    onClick={() => setPageSize(size)}
+                    onClick={() => {
+                      setPageSize(size);
+                      setCurrentPage(1);
+                    }}
                     className={`px-2 py-0.5 rounded text-[11px] font-mono transition ${
                       pageSize === size
                         ? 'bg-sky-600 text-white font-bold shadow-sm'
