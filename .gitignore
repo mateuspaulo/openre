@@ -1,6 +1,8 @@
 # Release bundles and binary archives
 release/*.zip
 release/*.exe
+release/*.deb
+release/*.tar.gz
 release/OpenRe-Windows-x64-Portable/
 !release/SHA256SUMS.txt
 !release/*.sha256
