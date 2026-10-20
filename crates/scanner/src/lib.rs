@@ -1,3 +1,4 @@
+use byteorder::{ByteOrder, LittleEndian};
 use device_access::BlockReader;
 use file_carving::carve_at_offset;
 use filesystem::{detect_filesystem, exfat, fat32, ntfs};
@@ -47,41 +48,62 @@ impl Scanner {
         on_progress(progress.clone());
 
         let mut sector_0 = [0u8; 4096];
-        let bytes_read = reader.read_at(0, &mut sector_0)?;
+        let bytes_read = reader.read_at(0, &mut sector_0).unwrap_or(0);
 
         if bytes_read >= 512 {
             if let Some(fs_type) = detect_filesystem(&sector_0) {
                 progress.current_label = format!("Detected {fs_type} filesystem. Reading metadata...");
                 on_progress(progress.clone());
 
+                let mut last_emit = Instant::now();
+
                 match fs_type {
                     "NTFS" => {
-                        // Scan for MFT records in first 50MB
-                        let scan_limit = total.min(50 * 1024 * 1024);
+                        let bytes_per_sector = LittleEndian::read_u16(&sector_0[0x0B..0x0D]) as u64;
+                        let sectors_per_cluster = sector_0[0x0D] as u64;
+                        let cluster_size = if bytes_per_sector >= 512 && sectors_per_cluster > 0 {
+                            bytes_per_sector * sectors_per_cluster
+                        } else {
+                            4096
+                        };
+                        let mft_lcn = LittleEndian::read_u64(&sector_0[0x30..0x38]);
+                        let mft_start = mft_lcn * cluster_size;
+
+                        let mut scan_ranges = Vec::new();
+                        if mft_start > 0 && mft_start < total {
+                            scan_ranges.push((mft_start, (mft_start + 40 * 1024 * 1024).min(total)));
+                        }
+                        scan_ranges.push((0, total.min(20 * 1024 * 1024)));
+
                         let mut mft_buf = vec![0u8; 1024];
-                        let mut offset = 0u64;
 
-                        while offset + 1024 <= scan_limit {
-                            if cancel.is_cancelled() {
-                                return Err(RecoveryError::Cancelled);
-                            }
+                        for (start_off, limit_off) in scan_ranges {
+                            let mut offset = start_off;
+                            while offset + 1024 <= limit_off {
+                                if cancel.is_cancelled() {
+                                    return Err(RecoveryError::Cancelled);
+                                }
 
-                            if reader.read_at(offset, &mut mft_buf).is_ok() {
-                                if let Some(mft_file) = ntfs::parse_mft_record(&mft_buf) {
-                                    if mft_file.is_deleted {
+                                if reader.read_at(offset, &mut mft_buf).is_ok() {
+                                    if let Some(mft_file) = ntfs::parse_mft_record(&mft_buf) {
                                         let id = format!("ntfs_{offset:08X}");
                                         results.push(mft_file.to_recovered_file(id));
                                         progress.files_found = results.len();
                                     }
                                 }
+                                offset += 1024;
+                                progress.bytes_scanned = offset;
+                                if last_emit.elapsed().as_millis() >= 100 {
+                                    last_emit = Instant::now();
+                                    on_progress(progress.clone());
+                                }
                             }
-                            offset += 1024;
-                            progress.bytes_scanned = offset;
-                            on_progress(progress.clone());
+                            if !results.is_empty() {
+                                break;
+                            }
                         }
                     }
                     "FAT32" => {
-                        // Scan directory clusters in first 30MB
                         let scan_limit = total.min(30 * 1024 * 1024);
                         let mut dir_buf = vec![0u8; 4096];
                         let mut offset = 0u64;
@@ -94,16 +116,17 @@ impl Scanner {
                             if reader.read_at(offset, &mut dir_buf).is_ok() {
                                 let fat_files = fat32::parse_fat32_entries(&dir_buf);
                                 for ff in fat_files {
-                                    if ff.is_deleted {
-                                        let id = format!("fat32_{:08X}", ff.cluster_or_sector_offset);
-                                        results.push(ff.to_recovered_file(id));
-                                        progress.files_found = results.len();
-                                    }
+                                    let id = format!("fat32_{:08X}", ff.cluster_or_sector_offset);
+                                    results.push(ff.to_recovered_file(id));
+                                    progress.files_found = results.len();
                                 }
                             }
                             offset += 4096;
                             progress.bytes_scanned = offset;
-                            on_progress(progress.clone());
+                            if last_emit.elapsed().as_millis() >= 100 {
+                                last_emit = Instant::now();
+                                on_progress(progress.clone());
+                            }
                         }
                     }
                     "exFAT" => {
@@ -119,16 +142,17 @@ impl Scanner {
                             if reader.read_at(offset, &mut dir_buf).is_ok() {
                                 let exfat_files = exfat::parse_exfat_entries(&dir_buf);
                                 for ef in exfat_files {
-                                    if ef.is_deleted {
-                                        let id = format!("exfat_{:08X}", ef.cluster_or_sector_offset);
-                                        results.push(ef.to_recovered_file(id));
-                                        progress.files_found = results.len();
-                                    }
+                                    let id = format!("exfat_{:08X}", ef.cluster_or_sector_offset);
+                                    results.push(ef.to_recovered_file(id));
+                                    progress.files_found = results.len();
                                 }
                             }
                             offset += 4096;
                             progress.bytes_scanned = offset;
-                            on_progress(progress.clone());
+                            if last_emit.elapsed().as_millis() >= 100 {
+                                last_emit = Instant::now();
+                                on_progress(progress.clone());
+                            }
                         }
                     }
                     _ => {}
@@ -136,13 +160,22 @@ impl Scanner {
             }
         }
 
-        // If no deleted filesystem records were found (e.g. source is a user folder path)
-        let source_path = Path::new(reader.device_id());
-        if results.is_empty() && source_path.is_dir() {
-            progress.current_label = "Scanning directory tree...".to_string();
+        // If no deleted filesystem records were found (e.g. source is a user folder path or volume without admin)
+        let device_id = reader.device_id();
+        let source_path_str = if device_id.len() == 2 && device_id.ends_with(':') {
+            format!("{}:\\", device_id.chars().next().unwrap())
+        } else {
+            device_id.to_string()
+        };
+        let source_path = Path::new(&source_path_str);
+        if results.is_empty() && (source_path.is_dir() || Path::new(device_id).is_dir()) {
+            let active_dir = if source_path.is_dir() { source_path } else { Path::new(device_id) };
+            progress.current_label = format!("Scanning directory tree at {}...", active_dir.display());
             on_progress(progress.clone());
 
-            for entry in WalkDir::new(source_path).into_iter().flatten() {
+            let mut last_emit = Instant::now();
+
+            for entry in WalkDir::new(active_dir).into_iter().flatten() {
                 if cancel.is_cancelled() {
                     return Err(RecoveryError::Cancelled);
                 }
@@ -181,7 +214,11 @@ impl Scanner {
 
                     progress.files_found = results.len();
                     progress.bytes_scanned += size_bytes;
-                    on_progress(progress.clone());
+
+                    if last_emit.elapsed().as_millis() >= 100 {
+                        last_emit = Instant::now();
+                        on_progress(progress.clone());
+                    }
                 }
             }
         }

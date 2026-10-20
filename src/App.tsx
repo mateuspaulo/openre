@@ -201,7 +201,11 @@ export default function App() {
       const handler = (event: any) => {
         if (event.detail && event.detail.msgId === msgId) {
           window.removeEventListener('openre-response' as any, handler);
-          resolve(event.detail.data);
+          let data = event.detail.data;
+          if (typeof data === 'string') {
+            try { data = JSON.parse(data); } catch (_) {}
+          }
+          resolve(data);
         }
       };
       window.addEventListener('openre-response' as any, handler);
@@ -239,7 +243,12 @@ export default function App() {
     });
 
     const onBackendEvent = (e: any) => {
-      const { type, payload } = e.detail || {};
+      let { type, payload } = e.detail || {};
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload); } catch (_) {}
+      }
+      if (!payload) payload = {};
+
       if (type === 'openre-log') {
         appendLog(payload.level || 'info', payload.message || '', payload.timestamp);
       } else if (type === 'scan_progress') {
@@ -255,10 +264,11 @@ export default function App() {
       } else if (type === 'scan_completed') {
         setIsScanning(false);
         setScanError(null);
-        setDiscoveredFiles(payload.files || []);
-        setSelectedFileIds(new Set((payload.files || []).map((f: any) => f.id)));
+        const filesList = Array.isArray(payload.files) ? payload.files : [];
+        setDiscoveredFiles(filesList);
+        setSelectedFileIds(new Set(filesList.map((f: any) => f.id)));
         setCurrentStep(5);
-        appendLog('success', `Scan complete. Found ${(payload.files || []).length} recoverable items.`);
+        appendLog('success', `Scan complete. Found ${filesList.length} recoverable items.`);
       } else if (type === 'scan_error') {
         setIsScanning(false);
         setScanError(payload.error || 'Scan stopped due to an error.');

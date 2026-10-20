@@ -2889,6 +2889,7 @@ dependencies = [
 name = "scanner"
 version = "0.1.2"
 dependencies = [
+ "byteorder",
  "device-access",
  "file-carving",
  "file-preview",

@@ -415,18 +415,22 @@ fn emit_log(level: &str, message: &str, proxy: &EventLoopProxy<UserEvent>) {
 }
 
 fn emit_response(msg_id: Option<String>, json_data: &str, proxy: &EventLoopProxy<UserEvent>) {
+    let encoded_msg_id = serde_json::to_string(&msg_id).unwrap_or_else(|_| "null".to_string());
+    let encoded_data = serde_json::to_string(json_data).unwrap_or_else(|_| "\"\"".to_string());
     let script = format!(
-        "window.dispatchEvent(new CustomEvent('openre-response', {{ detail: {{ msgId: {}, data: {} }} }}));",
-        serde_json::to_string(&msg_id).unwrap(),
-        json_data
+        "try {{ window.dispatchEvent(new CustomEvent('openre-response', {{ detail: {{ msgId: {}, data: JSON.parse({}) }} }})); }} catch(err) {{ console.error('Failed to dispatch openre-response:', err); }}",
+        encoded_msg_id,
+        encoded_data
     );
     let _ = proxy.send_event(UserEvent::EvaluateScript(script));
 }
 
 fn emit_event(event_type: &str, json_payload: &str, proxy: &EventLoopProxy<UserEvent>) {
+    let encoded_payload = serde_json::to_string(json_payload).unwrap_or_else(|_| "\"\"".to_string());
     let script = format!(
-        "window.dispatchEvent(new CustomEvent('openre-event', {{ detail: {{ type: '{}', payload: {} }} }}));",
-        event_type, json_payload
+        "try {{ window.dispatchEvent(new CustomEvent('openre-event', {{ detail: {{ type: '{}', payload: JSON.parse({}) }} }})); }} catch(err) {{ console.error('Failed to dispatch openre-event:', err); }}",
+        event_type,
+        encoded_payload
     );
     let _ = proxy.send_event(UserEvent::EvaluateScript(script));
 }

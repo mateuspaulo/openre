@@ -15,6 +15,7 @@ reporting = { workspace = true }
 sha2 = { workspace = true }
 rayon = { workspace = true }
 walkdir = { workspace = true }
+byteorder = { workspace = true }
 
 [dev-dependencies]
 file-preview = { workspace = true }
