@@ -1,1 +1,1 @@
-52d54b7cbedf1828405136367a7b3f88bafc32255b5c7ee381d9923e094a24b1  OpenRe-Windows-x64-Portable.zip
+0e1091bb1493d69d8fcb4ba0e5849f1fd3937ef6d072b4cf998e610f4dfcc7e7 *OpenRe-Windows-x64-Portable.zip
