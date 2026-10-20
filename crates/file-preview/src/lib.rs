@@ -59,8 +59,8 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
                 _ => "audio/mpeg",
             };
 
-            // Only encode data URL if file is under 3MB to prevent IPC freezing and broken playback
-            let media_url = if !data.is_empty() && data.len() <= 3 * 1024 * 1024 {
+            // Encode data URL if file is under 15MB to support fallback playback without freezing IPC
+            let media_url = if !data.is_empty() && data.len() <= 15 * 1024 * 1024 {
                 Some(format!("data:{};base64,{}", mime, BASE64.encode(data)))
             } else {
                 None
@@ -91,8 +91,8 @@ pub fn generate_preview(data: &[u8], extension: &str) -> PreviewData {
                 _ => "video/mp4",
             };
 
-            // Only encode data URL if file is under 3MB to prevent IPC freezing and broken playback
-            let media_url = if !data.is_empty() && data.len() <= 3 * 1024 * 1024 {
+            // Encode data URL if file is under 15MB to support fallback playback without freezing IPC
+            let media_url = if !data.is_empty() && data.len() <= 15 * 1024 * 1024 {
                 Some(format!("data:{};base64,{}", mime, BASE64.encode(data)))
             } else {
                 None

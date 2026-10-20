@@ -104,6 +104,128 @@ interface LogEntry {
   message: string;
 }
 
+interface ChosenSelectOption<T> {
+  value: T;
+  label: string;
+  badge?: number | string;
+  icon?: React.ReactNode;
+}
+
+function ChosenSelect<T extends string | number>({
+  value,
+  options,
+  onChange,
+  direction = 'down',
+  minWidth = 'w-40',
+  className = '',
+}: {
+  value: T;
+  options: ChosenSelectOption<T>[];
+  onChange: (val: T) => void;
+  direction?: 'up' | 'down';
+  minWidth?: string;
+  className?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selectedOption = options.find((o) => o.value === value) || options[0];
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') setIsOpen(false);
+    }
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  const popoverPosition =
+    direction === 'up'
+      ? 'bottom-full mb-1.5'
+      : 'top-full mt-1.5';
+
+  return (
+    <div ref={containerRef} className={`relative inline-block text-left select-none ${className}`}>
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        className={`inline-flex items-center justify-between gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border transition shadow-sm ${
+          isOpen
+            ? 'border-sky-500 bg-slate-850 text-white ring-1 ring-sky-500/50 shadow-sky-500/10'
+            : 'border-slate-750 bg-slate-900 text-slate-200 hover:bg-slate-850 hover:border-slate-600'
+        }`}
+      >
+        <span className="flex items-center gap-1.5 truncate">
+          {selectedOption?.icon}
+          <span className="truncate">{selectedOption?.label}</span>
+          {selectedOption?.badge !== undefined && (
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-400 font-mono">
+              {selectedOption.badge}
+            </span>
+          )}
+        </span>
+        <ChevronDown
+          className={`w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform duration-200 ${
+            isOpen ? 'rotate-180 text-sky-400' : ''
+          }`}
+        />
+      </button>
+
+      {isOpen && (
+        <div
+          role="listbox"
+          className={`absolute ${popoverPosition} left-0 ${minWidth} max-h-60 overflow-y-auto py-1 bg-slate-900 border border-slate-700/90 rounded-xl shadow-2xl z-50 backdrop-blur-md animate-in fade-in zoom-in-95 duration-100`}
+        >
+          {options.map((opt) => {
+            const isSelected = opt.value === value;
+            return (
+              <button
+                key={String(opt.value)}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(opt.value);
+                  setIsOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3 py-1.5 text-xs text-left transition ${
+                  isSelected
+                    ? 'bg-sky-500/15 text-sky-400 font-semibold'
+                    : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2 truncate">
+                  {opt.icon}
+                  <span className="truncate">{opt.label}</span>
+                  {opt.badge !== undefined && (
+                    <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-400 font-mono">
+                      {opt.badge}
+                    </span>
+                  )}
+                </div>
+                {isSelected && <Check className="w-3.5 h-3.5 text-sky-400 shrink-0 ml-2" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [language, setLanguage] = useState<'en' | 'pt'>('en');
@@ -511,9 +633,20 @@ export default function App() {
     setTimeout(() => setCopiedHex(false), 2000);
   };
 
+  const fetchSequenceRef = useRef<number>(0);
+  const [debouncedSearch, setDebouncedSearch] = useState<string>(searchQuery);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   // Indexed catalog fetch from backend (acting like database with page, limit, offset)
   const fetchCatalogPage = useCallback(
     async (page: number, size: number, category: string, search: string) => {
+      const reqId = ++fetchSequenceRef.current;
       setIsLoadingPage(true);
       try {
         const res = await sendIpc('get_files_page', {
@@ -523,6 +656,8 @@ export default function App() {
           search,
           source_id: selectedSource?.id,
         });
+
+        if (reqId !== fetchSequenceRef.current) return;
 
         if (res) {
           setPaginatedFiles(res.items || []);
@@ -537,29 +672,35 @@ export default function App() {
           }
         }
       } catch (err) {
-        console.error('Failed to fetch catalog page:', err);
+        if (reqId === fetchSequenceRef.current) {
+          console.error('Failed to fetch catalog page:', err);
+        }
       } finally {
-        setIsLoadingPage(false);
+        if (reqId === fetchSequenceRef.current) {
+          setIsLoadingPage(false);
+        }
       }
     },
-    []
+    [selectedSource?.id]
   );
 
-  // Fetch page when page, pageSize, filterCategory, or view step readiness changes
+  // Sync page 1 and clear selection whenever category or debounced search changes
+  const prevFilterRef = useRef({ category: filterCategory, search: debouncedSearch });
   useEffect(() => {
-    if (currentStep !== 5 || isPreparingResults) return;
-    fetchCatalogPage(currentPage, pageSize, filterCategory, searchQuery);
-  }, [currentPage, pageSize, filterCategory, currentStep, isPreparingResults]);
-
-  // Debounced fetch for search query changes
-  useEffect(() => {
-    if (currentStep !== 5 || isPreparingResults) return;
-    const timer = setTimeout(() => {
+    if (prevFilterRef.current.category !== filterCategory || prevFilterRef.current.search !== debouncedSearch) {
+      prevFilterRef.current = { category: filterCategory, search: debouncedSearch };
       setCurrentPage(1);
-      fetchCatalogPage(1, pageSize, filterCategory, searchQuery);
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [searchQuery, currentStep, isPreparingResults]);
+      setSelectionMode('all');
+      setDeselectedFileIds(new Set());
+      setSelectedFileIds(new Set());
+    }
+  }, [filterCategory, debouncedSearch]);
+
+  // Fetch page when page, pageSize, filterCategory, debouncedSearch, or view step readiness changes
+  useEffect(() => {
+    if (currentStep !== 5 || isPreparingResults) return;
+    fetchCatalogPage(currentPage, pageSize, filterCategory, debouncedSearch);
+  }, [currentPage, pageSize, filterCategory, debouncedSearch, currentStep, isPreparingResults, fetchCatalogPage]);
 
   // Range and selection computations
   const safeCurrentPage = Math.min(Math.max(1, currentPage), Math.max(1, totalPages));
@@ -1358,36 +1499,58 @@ export default function App() {
                   className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-500 w-52 sm:w-60"
                 />
 
-                <select
+                <ChosenSelect<string>
                   value={filterCategory}
-                  onChange={(e) => {
-                    setFilterCategory(e.target.value);
+                  onChange={(cat) => {
+                    setFilterCategory(cat);
                     setCurrentPage(1);
                   }}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:border-sky-500"
-                >
-                  <option value="All">
-                    {language === 'en' ? 'All Categories' : 'Todas Categorias'}{totalDiscoveredCount > 0 ? ` (${totalDiscoveredCount.toLocaleString()})` : ''}
-                  </option>
-                  <option value="Image">
-                    {language === 'en' ? 'Images' : 'Imagens'}{categoryCounts['Image'] !== undefined ? ` (${categoryCounts['Image'].toLocaleString()})` : ''}
-                  </option>
-                  <option value="Document">
-                    {language === 'en' ? 'Documents' : 'Documentos'}{categoryCounts['Document'] !== undefined ? ` (${categoryCounts['Document'].toLocaleString()})` : ''}
-                  </option>
-                  <option value="Video">
-                    {language === 'en' ? 'Videos' : 'Vídeos'}{categoryCounts['Video'] !== undefined ? ` (${categoryCounts['Video'].toLocaleString()})` : ''}
-                  </option>
-                  <option value="Audio">
-                    {language === 'en' ? 'Audio' : 'Áudio'}{categoryCounts['Audio'] !== undefined ? ` (${categoryCounts['Audio'].toLocaleString()})` : ''}
-                  </option>
-                  <option value="Archive">
-                    {language === 'en' ? 'Archives' : 'Arquivos Compactados'}{categoryCounts['Archive'] !== undefined ? ` (${categoryCounts['Archive'].toLocaleString()})` : ''}
-                  </option>
-                  <option value="Text">
-                    {language === 'en' ? 'Text' : 'Texto'}{categoryCounts['Text'] !== undefined ? ` (${categoryCounts['Text'].toLocaleString()})` : ''}
-                  </option>
-                </select>
+                  direction="down"
+                  minWidth="w-56"
+                  options={[
+                    {
+                      value: 'All',
+                      label: language === 'en' ? 'All Categories' : 'Todas Categorias',
+                      badge: totalDiscoveredCount > 0 ? totalDiscoveredCount.toLocaleString() : undefined,
+                    },
+                    {
+                      value: 'Image',
+                      label: language === 'en' ? 'Images' : 'Imagens',
+                      badge: categoryCounts['Image'] !== undefined ? categoryCounts['Image'].toLocaleString() : undefined,
+                      icon: <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />,
+                    },
+                    {
+                      value: 'Document',
+                      label: language === 'en' ? 'Documents' : 'Documentos',
+                      badge: categoryCounts['Document'] !== undefined ? categoryCounts['Document'].toLocaleString() : undefined,
+                      icon: <FileText className="w-3.5 h-3.5 text-sky-400" />,
+                    },
+                    {
+                      value: 'Video',
+                      label: language === 'en' ? 'Videos' : 'Vídeos',
+                      badge: categoryCounts['Video'] !== undefined ? categoryCounts['Video'].toLocaleString() : undefined,
+                      icon: <Video className="w-3.5 h-3.5 text-purple-400" />,
+                    },
+                    {
+                      value: 'Audio',
+                      label: language === 'en' ? 'Audio' : 'Áudio',
+                      badge: categoryCounts['Audio'] !== undefined ? categoryCounts['Audio'].toLocaleString() : undefined,
+                      icon: <Volume2 className="w-3.5 h-3.5 text-amber-400" />,
+                    },
+                    {
+                      value: 'Archive',
+                      label: language === 'en' ? 'Archives' : 'Compactados',
+                      badge: categoryCounts['Archive'] !== undefined ? categoryCounts['Archive'].toLocaleString() : undefined,
+                      icon: <Archive className="w-3.5 h-3.5 text-amber-500" />,
+                    },
+                    {
+                      value: 'Text',
+                      label: language === 'en' ? 'Text' : 'Texto',
+                      badge: categoryCounts['Text'] !== undefined ? categoryCounts['Text'].toLocaleString() : undefined,
+                      icon: <FileCode className="w-3.5 h-3.5 text-indigo-400" />,
+                    },
+                  ]}
+                />
 
                 <div className="flex items-center gap-1.5 ml-1">
                   <button
@@ -1657,23 +1820,21 @@ export default function App() {
                 <span className="text-slate-400 text-xs font-medium">
                   {language === 'en' ? 'Per page:' : 'Por página:'}
                 </span>
-                <div className="relative inline-flex items-center">
-                  <select
-                    value={pageSize}
-                    onChange={(e) => {
-                      const newSize = Number(e.target.value);
-                      setPageSize(newSize);
-                      setCurrentPage(1);
-                    }}
-                    className="appearance-none bg-slate-900 hover:bg-slate-850 border border-slate-750 hover:border-slate-600 focus:border-sky-500 text-slate-200 text-xs font-mono font-medium rounded-lg pl-3 pr-8 py-1 shadow-sm transition focus:outline-none cursor-pointer"
-                  >
-                    <option value={10}>10 {language === 'en' ? 'items' : 'itens'}</option>
-                    <option value={20}>20 {language === 'en' ? 'items' : 'itens'}</option>
-                    <option value={50}>50 {language === 'en' ? 'items' : 'itens'}</option>
-                    <option value={100}>100 {language === 'en' ? 'items' : 'itens'}</option>
-                  </select>
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-400 pointer-events-none absolute right-2.5" />
-                </div>
+                <ChosenSelect<number>
+                  value={pageSize}
+                  onChange={(newSize) => {
+                    setPageSize(newSize);
+                    setCurrentPage(1);
+                  }}
+                  direction="up"
+                  minWidth="w-36"
+                  options={[
+                    { value: 10, label: `10 ${language === 'en' ? 'items' : 'itens'}` },
+                    { value: 20, label: `20 ${language === 'en' ? 'items' : 'itens'}` },
+                    { value: 50, label: `50 ${language === 'en' ? 'items' : 'itens'}` },
+                    { value: 100, label: `100 ${language === 'en' ? 'items' : 'itens'}` },
+                  ]}
+                />
               </div>
 
               {/* Right: Navigation controls */}
@@ -2065,6 +2226,7 @@ export default function App() {
                     ) : previewData.media_data_url && !audioError ? (
                       <div className="w-full">
                         <audio
+                          key={previewFile.id}
                           controls
                           className="w-full rounded-lg"
                           src={previewData.media_data_url}
@@ -2108,6 +2270,7 @@ export default function App() {
                     ) : previewData.media_data_url && !videoError ? (
                       <div className="w-full flex flex-col items-center">
                         <video
+                          key={previewFile.id}
                           controls
                           className="w-full max-h-64 rounded-lg bg-black border border-slate-800 object-contain shadow-lg"
                           src={previewData.media_data_url}

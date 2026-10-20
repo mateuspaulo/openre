@@ -6,6 +6,8 @@ use image_repair::repair_image;
 use recovery_core::{CancellationToken, RecoveredFile, RecoveryError};
 use scanner::Scanner;
 use serde::Deserialize;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -33,6 +35,7 @@ struct AppState {
     last_discovered: Vec<RecoveredFile>,
     current_source_id: String,
     thumbnail_cache: Arc<Mutex<std::collections::HashMap<String, Option<String>>>>,
+    media_port: u16,
 }
 
 #[derive(serde::Serialize)]
@@ -117,6 +120,369 @@ fn load_thumbnail_for_file(
     thumb
 }
 
+fn percent_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3);
+    for b in input.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
+fn percent_decode(input: &str) -> String {
+    let mut bytes = Vec::with_capacity(input.len());
+    let mut chars = input.bytes().peekable();
+    while let Some(b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next().unwrap_or(b'0');
+            let h2 = chars.next().unwrap_or(b'0');
+            let hex_str = [h1, h2];
+            if let Ok(s) = std::str::from_utf8(&hex_str) {
+                if let Ok(byte_val) = u8::from_str_radix(s, 16) {
+                    bytes.push(byte_val);
+                    continue;
+                }
+            }
+            bytes.push(b'%');
+            bytes.push(h1);
+            bytes.push(h2);
+        } else if b == b'+' {
+            bytes.push(b' ');
+        } else {
+            bytes.push(b);
+        }
+    }
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+fn get_mime_type(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" | "aac" => "audio/mp4",
+        "opus" => "audio/opus",
+        "wma" => "audio/x-ms-wma",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "wmv" => "video/x-ms-wmv",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => "application/octet-stream",
+    }
+}
+
+fn parse_range_header(header_val: &str, total_len: u64) -> Option<(u64, u64)> {
+    let s = header_val.trim();
+    let prefix = "bytes=";
+    if !s.to_lowercase().starts_with(prefix) {
+        return None;
+    }
+    let range_str = &s[prefix.len()..];
+    let mut parts = range_str.split('-');
+    let start_str = parts.next()?.trim();
+    let end_str = parts.next()?.trim();
+
+    if start_str.is_empty() {
+        if total_len == 0 {
+            return None;
+        }
+        let suffix_len: u64 = end_str.parse().ok()?;
+        let start = total_len.saturating_sub(suffix_len);
+        let end = total_len.saturating_sub(1);
+        Some((start, end))
+    } else {
+        let start: u64 = start_str.parse().ok()?;
+        if total_len == 0 {
+            return None;
+        }
+        let end: u64 = if end_str.is_empty() {
+            total_len.saturating_sub(1)
+        } else {
+            let parsed_end: u64 = end_str.parse().ok()?;
+            parsed_end.min(total_len.saturating_sub(1))
+        };
+        if start <= end && start < total_len {
+            Some((start, end))
+        } else {
+            None
+        }
+    }
+}
+
+fn handle_media_connection(mut stream: TcpStream) {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(30)));
+
+    let mut buf = [0u8; 4096];
+    let n = match stream.read(&mut buf) {
+        Ok(n) if n > 0 => n,
+        _ => return,
+    };
+
+    let req_str = String::from_utf8_lossy(&buf[..n]);
+    let mut lines = req_str.lines();
+    let req_line = match lines.next() {
+        Some(l) => l,
+        None => return,
+    };
+
+    let mut parts = req_line.split_whitespace();
+    let method = match parts.next() {
+        Some(m) => m,
+        None => return,
+    };
+    let uri = match parts.next() {
+        Some(u) => u,
+        None => return,
+    };
+
+    if method == "OPTIONS" {
+        let resp = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, HEAD, OPTIONS\r\nAccess-Control-Allow-Headers: Range, Content-Type\r\nAccess-Control-Max-Age: 86400\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
+    if method != "GET" && method != "HEAD" {
+        let resp = "HTTP/1.1 405 Method Not Allowed\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(resp.as_bytes());
+        return;
+    }
+
+    let mut range_header = None;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim().eq_ignore_ascii_case("range") {
+                range_header = Some(v.trim().to_string());
+            }
+        }
+    }
+
+    let (path_part, query_part) = match uri.split_once('?') {
+        Some((p, q)) => (p, q),
+        None => (uri, ""),
+    };
+
+    let mut query_params: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for pair in query_part.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            query_params.insert(k.to_string(), percent_decode(v));
+        }
+    }
+
+    if path_part == "/stream" {
+        let file_path = match query_params.get("path") {
+            Some(p) if !p.is_empty() => p,
+            _ => {
+                let resp = "HTTP/1.1 400 Bad Request\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+                return;
+            }
+        };
+
+        let mut file = match std::fs::File::open(file_path) {
+            Ok(f) => f,
+            Err(_) => {
+                let resp = "HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+                return;
+            }
+        };
+
+        let total_size = match file.metadata() {
+            Ok(m) => m.len(),
+            Err(_) => {
+                let resp = "HTTP/1.1 500 Internal Error\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+                return;
+            }
+        };
+
+        let ext = Path::new(file_path).extension().and_then(|e| e.to_str()).unwrap_or("");
+        let mime = get_mime_type(ext);
+
+        if let Some(ref range_str) = range_header {
+            if let Some((start, end)) = parse_range_header(range_str, total_size) {
+                let content_len = end - start + 1;
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Range\r\nConnection: close\r\n\r\n",
+                    mime, start, end, total_size, content_len
+                );
+                if stream.write_all(header.as_bytes()).is_err() {
+                    return;
+                }
+                if method == "GET" {
+                    if file.seek(SeekFrom::Start(start)).is_ok() {
+                        let mut remaining = content_len;
+                        let mut chunk = vec![0u8; 64 * 1024];
+                        while remaining > 0 {
+                            let to_read = (remaining as usize).min(chunk.len());
+                            let n = match file.read(&mut chunk[..to_read]) {
+                                Ok(n) if n > 0 => n,
+                                _ => break,
+                            };
+                            if stream.write_all(&chunk[..n]).is_err() {
+                                break;
+                            }
+                            remaining -= n as u64;
+                        }
+                    }
+                }
+                return;
+            } else {
+                let resp = format!(
+                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+                    total_size
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                return;
+            }
+        }
+
+        // Full content response (no Range header)
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Range\r\nConnection: close\r\n\r\n",
+            mime, total_size
+        );
+        if stream.write_all(header.as_bytes()).is_err() {
+            return;
+        }
+        if method == "GET" {
+            let mut chunk = vec![0u8; 64 * 1024];
+            loop {
+                let n = match file.read(&mut chunk) {
+                    Ok(n) if n > 0 => n,
+                    _ => break,
+                };
+                if stream.write_all(&chunk[..n]).is_err() {
+                    break;
+                }
+            }
+        }
+    } else if path_part == "/carved" {
+        let source_id = query_params.get("source_id").cloned().unwrap_or_default();
+        let offset: u64 = query_params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let size: u64 = query_params.get("size").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let ext = query_params.get("ext").cloned().unwrap_or_default();
+
+        if source_id.is_empty() || size == 0 {
+            let resp = "HTTP/1.1 400 Bad Request\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(resp.as_bytes());
+            return;
+        }
+
+        let mut reader = match open_block_reader(&source_id) {
+            Ok(r) => r,
+            Err(_) => {
+                let resp = "HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+                return;
+            }
+        };
+
+        let mime = get_mime_type(&ext);
+        let total_size = size;
+
+        if let Some(ref range_str) = range_header {
+            if let Some((start, end)) = parse_range_header(range_str, total_size) {
+                let content_len = end - start + 1;
+                let header = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: {}\r\nContent-Range: bytes {}-{}/{}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Range\r\nConnection: close\r\n\r\n",
+                    mime, start, end, total_size, content_len
+                );
+                if stream.write_all(header.as_bytes()).is_err() {
+                    return;
+                }
+                if method == "GET" {
+                    let mut cur_offset = offset + start;
+                    let mut remaining = content_len;
+                    let mut chunk = vec![0u8; 64 * 1024];
+                    while remaining > 0 {
+                        let to_read = (remaining as usize).min(chunk.len());
+                        let n = match reader.read_at(cur_offset, &mut chunk[..to_read]) {
+                            Ok(n) if n > 0 => n,
+                            _ => break,
+                        };
+                        if stream.write_all(&chunk[..n]).is_err() {
+                            break;
+                        }
+                        cur_offset += n as u64;
+                        remaining -= n as u64;
+                    }
+                }
+                return;
+            } else {
+                let resp = format!(
+                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+                    total_size
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                return;
+            }
+        }
+
+        // Full content response (no Range header)
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: Range\r\nConnection: close\r\n\r\n",
+            mime, total_size
+        );
+        if stream.write_all(header.as_bytes()).is_err() {
+            return;
+        }
+        if method == "GET" {
+            let mut cur_offset = offset;
+            let mut remaining = total_size;
+            let mut chunk = vec![0u8; 64 * 1024];
+            while remaining > 0 {
+                let to_read = (remaining as usize).min(chunk.len());
+                let n = match reader.read_at(cur_offset, &mut chunk[..to_read]) {
+                    Ok(n) if n > 0 => n,
+                    _ => break,
+                };
+                if stream.write_all(&chunk[..n]).is_err() {
+                    break;
+                }
+                cur_offset += n as u64;
+                remaining -= n as u64;
+            }
+        }
+    } else {
+        let resp = "HTTP/1.1 404 Not Found\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(resp.as_bytes());
+    }
+}
+
+fn start_media_server() -> Option<u16> {
+    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    let port = listener.local_addr().ok()?.port();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            if let Ok(stream) = stream {
+                thread::spawn(move || {
+                    handle_media_connection(stream);
+                });
+            }
+        }
+    });
+    Some(port)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::env::set_var(
         "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
@@ -132,11 +498,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_min_inner_size(LogicalSize::new(960.0, 640.0))
         .build(&event_loop)?;
 
+    let media_port = start_media_server().unwrap_or(0);
+    emit_log("info", &format!("Internal loopback media streaming service active on 127.0.0.1:{}", media_port), &proxy);
+
     let app_state = Arc::new(Mutex::new(AppState {
         cancel_token: CancellationToken::new(),
         last_discovered: Vec::new(),
         current_source_id: String::new(),
         thumbnail_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        media_port,
     }));
 
     let html_content = include_str!("../../dist/index.html");
@@ -183,6 +553,7 @@ fn handle_ipc_message(
 ) {
     let msg_id = msg.msg_id.clone();
     let cmd = msg.cmd.as_str();
+    let media_port = if let Ok(st) = state.lock() { st.media_port } else { 0 };
 
     match cmd {
         "list_devices" => {
@@ -474,22 +845,8 @@ fn handle_ipc_message(
             let effective_size = if size > 0 { size as usize } else { 2 * 1024 * 1024 };
             let read_limit = effective_size.min(4 * 1024 * 1024).max(64 * 1024);
 
-            let preview = if !orig_path.is_empty() && Path::new(orig_path).is_file() {
-                let cat = recovery_core::FileCategory::from_extension(ext);
-                if cat == recovery_core::FileCategory::Audio || cat == recovery_core::FileCategory::Video {
-                    let mut prev = generate_preview(&[], ext);
-                    let p_clean = orig_path.replace('\\', "/");
-                    prev.media_data_url = Some(format!("file:///{}", p_clean));
-                    if let Ok(mut f) = std::fs::File::open(orig_path) {
-                        use std::io::Read;
-                        let mut h_buf = vec![0u8; 512];
-                        let n = f.read(&mut h_buf).unwrap_or(0);
-                        h_buf.truncate(n);
-                        prev.hex_dump = file_preview::generate_hex_dump(&h_buf, 512);
-                    }
-                    prev
-                } else if let Ok(mut f) = std::fs::File::open(orig_path) {
-                    use std::io::Read;
+            let mut preview = if !orig_path.is_empty() && Path::new(orig_path).is_file() {
+                if let Ok(mut f) = std::fs::File::open(orig_path) {
                     let mut buf = vec![0u8; read_limit];
                     let n = f.read(&mut buf).unwrap_or(0);
                     buf.truncate(n);
@@ -505,6 +862,29 @@ fn handle_ipc_message(
             } else {
                 generate_preview(&[], ext)
             };
+
+            // Enhance audio and video previews with instant, high-performance loopback HTTP streaming
+            let cat = recovery_core::FileCategory::from_extension(ext);
+            if cat == recovery_core::FileCategory::Audio || cat == recovery_core::FileCategory::Video {
+                if media_port > 0 {
+                    if !orig_path.is_empty() && Path::new(orig_path).is_file() {
+                        preview.media_data_url = Some(format!(
+                            "http://127.0.0.1:{}/stream?path={}",
+                            media_port,
+                            percent_encode(orig_path)
+                        ));
+                    } else if !source_id.is_empty() && size > 0 {
+                        preview.media_data_url = Some(format!(
+                            "http://127.0.0.1:{}/carved?source_id={}&offset={}&size={}&ext={}",
+                            media_port,
+                            percent_encode(source_id),
+                            offset,
+                            size,
+                            percent_encode(ext)
+                        ));
+                    }
+                }
+            }
 
             let json = serde_json::to_string(&preview).unwrap_or_else(|_| "{}".to_string());
             emit_response(msg_id, &json, proxy);
