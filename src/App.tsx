@@ -1388,8 +1388,8 @@ export default function App() {
                     <span className="text-sky-400 font-bold">•</span>
                     <span>
                       {language === 'en'
-                        ? 'Administrator Elevation: Raw sector access to Windows logical drives (e.g. C:, D:) requires running OpenRe as Administrator. Right-click OpenRe.exe and choose "Run as Administrator".'
-                        : 'Permissão de Administrador: O acesso direto a setores brutos de discos no Windows exige executar o OpenRe como Administrador. Clique com botão direito no OpenRe.exe e selecione "Executar como Administrador".'}
+                        ? 'Administrator / Root Elevation: Raw sector access to physical drives (e.g. C:, /dev/nvme0n1) requires elevated permissions. On Windows: Right-click OpenRe.exe and choose "Run as Administrator". On Linux: Add your user to the disk group (`sudo usermod -aG disk $USER`) or launch with root.'
+                        : 'Permissão de Administrador / Root: O acesso direto a setores brutos de discos físicos (ex: C:, /dev/nvme0n1) exige permissões elevadas. No Windows: Execute como Administrador. No Linux: Adicione seu usuário ao grupo disk (`sudo usermod -aG disk $USER`) ou execute com permissões de root.'}
                     </span>
                   </div>
                   <div className="flex items-start gap-2">
