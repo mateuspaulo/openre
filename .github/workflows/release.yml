@@ -1,0 +1,151 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to publish to (e.g. v0.1.6)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Portable
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Frontend Dependencies & Build Frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build Rust Workspace
+        run: cargo build --release --workspace
+
+      - name: Package Windows Portable ZIP
+        shell: pwsh
+        run: |
+          $pkgDir = "OpenRe-Windows-x64-Portable"
+          New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
+          New-Item -ItemType Directory -Path "$pkgDir/docs" -Force | Out-Null
+          
+          # Copy GUI desktop app and CLI utility
+          if (Test-Path "target/release/OpenRe.exe") {
+              Copy-Item "target/release/OpenRe.exe" -Destination "$pkgDir/OpenRe.exe"
+          }
+          if (Test-Path "target/release/openre-cli.exe") {
+              Copy-Item "target/release/openre-cli.exe" -Destination "$pkgDir/openre-cli.exe"
+          }
+          
+          # Documentation
+          Copy-Item "README.md" -Destination "$pkgDir/README.txt"
+          Copy-Item "LICENSE" -Destination "$pkgDir/LICENSE"
+          if (Test-Path "docs/installation/INSTALLATION_EN.md") {
+              Copy-Item "docs/installation/INSTALLATION_EN.md" -Destination "$pkgDir/docs/"
+          }
+          if (Test-Path "docs/installation/INSTALLATION_PT_BR.md") {
+              Copy-Item "docs/installation/INSTALLATION_PT_BR.md" -Destination "$pkgDir/docs/"
+          }
+          
+          Compress-Archive -Path "$pkgDir/*" -DestinationPath "OpenRe-Windows-x64-Portable.zip" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "OpenRe-Windows-x64-Portable.zip").Hash.ToLower()
+          "$hash  OpenRe-Windows-x64-Portable.zip" | Out-File -Encoding ascii "OpenRe-Windows-x64-Portable.zip.sha256"
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          path: |
+            OpenRe-Windows-x64-Portable.zip
+            OpenRe-Windows-x64-Portable.zip.sha256
+
+  build-linux:
+    name: Build Linux Packages (.deb & .tar.gz)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libwayland-dev dpkg-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Frontend Dependencies & Build Frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build Rust Workspace
+        run: cargo build --release --workspace
+
+      - name: Package Debian (.deb) and Portable Tarball (.tar.gz)
+        run: |
+          chmod +x scripts/package_linux.sh
+          ./scripts/package_linux.sh
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            release/openre_amd64.deb
+            release/openre_amd64.deb.sha256
+            release/OpenRe-Linux-x64.tar.gz
+            release/OpenRe-Linux-x64.tar.gz.sha256
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded_artifacts
+
+      - name: Generate Consolidated Checksums
+        run: |
+          mkdir release_assets
+          find downloaded_artifacts -type f \( -name "*.zip" -o -name "*.deb" -o -name "*.tar.gz" -o -name "*.sha256" \) -exec cp {} release_assets/ \;
+          cd release_assets
+          sha256sum OpenRe-Windows-x64-Portable.zip openre_amd64.deb OpenRe-Linux-x64.tar.gz > SHA256SUMS.txt
+          ls -la
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag_name || github.ref_name }}
+          files: release_assets/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

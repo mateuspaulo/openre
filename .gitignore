@@ -7,8 +7,9 @@ release/OpenRe-Windows-x64-Portable/
 !release/SHA256SUMS.txt
 !release/*.sha256
 
-# Rust build artifacts
+# Rust and packaging build artifacts
 target/
+build/
 **/*.rs.bk
 Cargo.lock.backup
 
