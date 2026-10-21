@@ -514,7 +514,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxy_for_ipc = proxy.clone();
     let state_for_ipc = Arc::clone(&app_state);
 
-    let webview = WebViewBuilder::new()
+    let builder = WebViewBuilder::new()
         .with_html(html_content)
         .with_ipc_handler(move |request| {
             let msg_str = request.body();
@@ -522,8 +522,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(msg) = msg {
                 handle_ipc_message(&msg, &state_for_ipc, &proxy_for_ipc);
             }
-        })
-        .build(&window)?;
+        });
+
+    #[cfg(target_os = "linux")]
+    let webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window
+            .default_vbox()
+            .ok_or_else(|| "Failed to get default vbox from GTK window")?;
+        builder.build_gtk(vbox)?
+    };
+
+    #[cfg(not(target_os = "linux"))]
+    let webview = builder.build(&window)?;
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
